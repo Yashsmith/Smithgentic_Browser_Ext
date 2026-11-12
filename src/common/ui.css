@@ -1,0 +1,479 @@
+/* Smithgentic Browser shared UI layer ----------------------------------------------
+   One token set for every surface we own: the side panel, the settings page and
+   the in-page overlay. Light, slightly warm paper with near-black ink, a tight
+   4/8/12 radius set, a five-step type scale (12/13/14/16/20), and the accent
+   spent on two things per view: the primary action and the active state.
+
+   Linked as a second stylesheet BEFORE the page stylesheet (never @import,
+   which serialises the fetch). Page stylesheets may only add layout and
+   page-specific components; colour, radius, shadow, type and focus live here.
+
+   Every pair below is a measured contrast pair: `--sg-x` is the fill used for
+   dots, rules and borders, `--sg-x-ink` is the only value allowed for text on
+   the page surface, and `--sg-x-soft` is the chip background that `-ink` is
+   also legible on. All text pairs clear WCAG AA (>= 4.5:1) in both themes.
+   -------------------------------------------------------------------------- */
+
+:root {
+  /* Surfaces: paper is the page, surface the things on it (composer, cards,
+     menus), sunken the wells (segmented control, code, neutral tags). */
+  --sg-paper: #f5f5f4;
+  --sg-surface: #ffffff;
+  --sg-surface-2: #fafaf9;
+  --sg-sunken: #ecebe9;
+  --sg-raised: #ffffff;
+  --sg-hover: rgba(28, 25, 23, 0.06);
+
+  /* Lines */
+  --sg-line: #e7e5e4;
+  --sg-line-2: #d6d3d1;
+  --sg-line-strong: #8a8580;
+
+  /* Text */
+  --sg-ink: #1c1917;
+  --sg-ink-soft: #44403c;
+  --sg-muted: #6b6763;
+
+  /* Brand */
+  --sg-accent: #4f46e5;
+  --sg-accent-hover: #4338ca;
+  --sg-accent-ink: #4338ca;
+  --sg-accent-soft: #eef0fe;
+  --sg-accent-ring: rgba(79, 70, 229, 0.2);
+  --sg-on-accent: #ffffff;
+
+  /* Semantics */
+  --sg-good: #15803d;
+  --sg-good-ink: #166534;
+  --sg-good-soft: #e7f6ec;
+  --sg-warn: #b45309;
+  --sg-warn-ink: #92400e;
+  --sg-warn-soft: #fdf2df;
+  --sg-bad: #dc2626;
+  --sg-bad-ink: #b91c1c;
+  --sg-bad-soft: #fdeceb;
+
+  /* Code tokens: Prism's classes map onto these seven, measured against
+     --sg-surface (the code frame's fill) in both themes. */
+  --sg-tok-comment: #046a09;
+  --sg-tok-key: #990077;
+  --sg-tok-string: #4a7100;
+  --sg-tok-number: #ae00a1;
+  --sg-tok-func: #8a5a2f;
+  --sg-tok-punct: #756042;
+  --sg-tok-tag: #b16;
+
+  /* Shape */
+  --sg-r-sm: 4px;
+  --sg-r: 8px;
+  --sg-r-lg: 12px;
+  --sg-r-pill: 999px;
+
+  /* Space */
+  --sg-1: 4px;
+  --sg-2: 8px;
+  --sg-3: 12px;
+  --sg-4: 16px;
+  --sg-5: 20px;
+  --sg-6: 24px;
+  --sg-8: 32px;
+  --sg-10: 40px;
+
+  /* Depth */
+  --sg-shadow-1: 0 1px 2px rgba(28, 25, 23, 0.06);
+  --sg-shadow-2: 0 1px 2px rgba(28, 25, 23, 0.06), 0 8px 24px -8px rgba(28, 25, 23, 0.16);
+  --sg-shadow-3: 0 24px 48px -16px rgba(28, 25, 23, 0.24);
+
+  /* Type: five sizes, each with its line height; prose runs at 1.5. */
+  --sg-fs-12: 12px;
+  --sg-lh-12: 16px;
+  --sg-fs-13: 13px;
+  --sg-lh-13: 18px;
+  --sg-fs-14: 14px;
+  --sg-lh-14: 20px;
+  --sg-fs-16: 16px;
+  --sg-lh-16: 22px;
+  --sg-fs-20: 20px;
+  --sg-lh-20: 26px;
+  --sg-lh-prose: 1.5;
+  --sg-w-regular: 400;
+  --sg-w-medium: 500;
+  --sg-w-semibold: 600;
+  --sg-w-bold: 700;
+  --sg-track-label: 0.08em;
+  --sg-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --sg-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  color-scheme: light dark;
+}
+
+/* Dark is declared twice on purpose: once for the system preference (skipped
+   when a future toggle has pinned light) and once for an explicit
+   [data-theme="dark"], so the toggle wins in both directions. Near-black with
+   the same warm bias as light. White fails AA on the lighter dark accent, so
+   on-accent flips to the paper colour. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --sg-paper: #141413;
+    --sg-surface: #1c1c1a;
+    --sg-surface-2: #222220;
+    --sg-sunken: #262624;
+    --sg-raised: #33332f;
+    --sg-hover: rgba(255, 255, 255, 0.06);
+
+    --sg-line: #2e2e2b;
+    --sg-line-2: #43423e;
+    --sg-line-strong: #6f6d68;
+
+    --sg-ink: #ededec;
+    --sg-ink-soft: #c9c8c4;
+    --sg-muted: #9d9b96;
+
+    --sg-accent: #8b7dff;
+    --sg-accent-hover: #9d91ff;
+    --sg-accent-ink: #b4aaff;
+    --sg-accent-soft: #262441;
+    --sg-accent-ring: rgba(139, 125, 255, 0.3);
+    --sg-on-accent: #141413;
+
+    --sg-good: #4ade80;
+    --sg-good-ink: #6ee7a0;
+    --sg-good-soft: #11281b;
+    --sg-warn: #f59e0b;
+    --sg-warn-ink: #fbbf5c;
+    --sg-warn-soft: #2e2210;
+    --sg-bad: #f87171;
+    --sg-bad-ink: #fca5a5;
+    --sg-bad-soft: #331b1b;
+
+    --sg-tok-comment: #6f8f74;
+    --sg-tok-key: #d4a0e0;
+    --sg-tok-string: #d6a06a;
+    --sg-tok-number: #e08fb0;
+    --sg-tok-func: #d6c46a;
+    --sg-tok-punct: #9d9b96;
+    --sg-tok-tag: #e08f8f;
+
+    --sg-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --sg-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+    --sg-shadow-3: 0 24px 48px -16px rgba(0, 0, 0, 0.7);
+  }
+}
+
+:root[data-theme="dark"] {
+  --sg-paper: #141413;
+  --sg-surface: #1c1c1a;
+  --sg-surface-2: #222220;
+  --sg-sunken: #262624;
+  --sg-raised: #33332f;
+  --sg-hover: rgba(255, 255, 255, 0.06);
+
+  --sg-line: #2e2e2b;
+  --sg-line-2: #43423e;
+  --sg-line-strong: #6f6d68;
+
+  --sg-ink: #ededec;
+  --sg-ink-soft: #c9c8c4;
+  --sg-muted: #9d9b96;
+
+  --sg-accent: #8b7dff;
+  --sg-accent-hover: #9d91ff;
+  --sg-accent-ink: #b4aaff;
+  --sg-accent-soft: #262441;
+  --sg-accent-ring: rgba(139, 125, 255, 0.3);
+  --sg-on-accent: #141413;
+
+  --sg-good: #4ade80;
+  --sg-good-ink: #6ee7a0;
+  --sg-good-soft: #11281b;
+  --sg-warn: #f59e0b;
+  --sg-warn-ink: #fbbf5c;
+  --sg-warn-soft: #2e2210;
+  --sg-bad: #f87171;
+  --sg-bad-ink: #fca5a5;
+  --sg-bad-soft: #331b1b;
+
+  --sg-tok-comment: #6f8f74;
+  --sg-tok-key: #d4a0e0;
+  --sg-tok-string: #d6a06a;
+  --sg-tok-number: #e08fb0;
+  --sg-tok-func: #d6c46a;
+  --sg-tok-punct: #9d9b96;
+  --sg-tok-tag: #e08f8f;
+
+  --sg-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --sg-shadow-2: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px -8px rgba(0, 0, 0, 0.6);
+  --sg-shadow-3: 0 24px 48px -16px rgba(0, 0, 0, 0.7);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--sg-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Type ramp -------------------------------------------------------------- */
+
+h1,
+h2,
+h3,
+.empty-title {
+  text-wrap: balance;
+}
+
+.os-display {
+  font-size: var(--sg-fs-20);
+  line-height: var(--sg-lh-20);
+  font-weight: var(--sg-w-bold);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.os-title {
+  font-size: var(--sg-fs-16);
+  line-height: var(--sg-lh-16);
+  font-weight: var(--sg-w-semibold);
+  margin: 0;
+}
+/* Uppercase labels: mono, small, tracked, and never in the accent. */
+.eyebrow {
+  font-family: var(--sg-mono);
+  font-size: var(--sg-fs-12);
+  line-height: var(--sg-lh-12);
+  font-weight: var(--sg-w-semibold);
+  letter-spacing: var(--sg-track-label);
+  text-transform: uppercase;
+  color: var(--sg-muted);
+}
+.mono {
+  font-family: var(--sg-mono);
+  font-size: var(--sg-fs-12);
+  line-height: var(--sg-lh-12);
+}
+
+/* Counts, durations and prices line up when they change. */
+.log-sum,
+.log-dur,
+.wf-count,
+.rec-banner,
+.plan-steps,
+#temp-value,
+input[type="number"],
+.interval-hint,
+.test-line {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Icons: an inline <svg> sprite is the only CSP-safe, no-fetch way to get real
+   icons into an MV3 page. 16px glyph in a 32px target, stroked in currentColor
+   so hover/active states need no second asset. */
+.ic {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Primitives ------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sg-2);
+  min-height: 36px;
+  padding: 0 14px;
+  font: inherit;
+  font-size: var(--sg-fs-13);
+  line-height: var(--sg-lh-12);
+  font-weight: var(--sg-w-semibold);
+  border: 1px solid transparent;
+  border-radius: var(--sg-r);
+  background: var(--sg-accent);
+  color: var(--sg-on-accent);
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.btn:hover:not(:disabled) {
+  background: var(--sg-accent-hover);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.btn.small {
+  min-height: 32px;
+  padding: 0 12px;
+}
+.btn.small .ic {
+  width: 14px;
+  height: 14px;
+}
+
+/* Secondary buttons never turn indigo on hover: the hover tint is laid over
+   the surface so it reads the same on paper and on a card. */
+.btn-ghost {
+  background: var(--sg-surface);
+  color: var(--sg-ink);
+  border-color: var(--sg-line-2);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: linear-gradient(var(--sg-hover), var(--sg-hover)) var(--sg-surface);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--sg-bad-ink);
+  border-color: var(--sg-bad);
+}
+.btn-danger:hover:not(:disabled) {
+  background: var(--sg-bad-soft);
+}
+
+/* Static tags. Neutral by default; the semantic pairs carry meaning, and
+   `.accent` is reserved for the one "Active" marker. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sg-1);
+  font-size: var(--sg-fs-12);
+  line-height: var(--sg-lh-12);
+  font-weight: var(--sg-w-medium);
+  border: 0;
+  border-radius: var(--sg-r-sm);
+  padding: 2px 6px;
+  background: var(--sg-sunken);
+  color: var(--sg-ink-soft);
+  white-space: nowrap;
+}
+.chip.good {
+  background: var(--sg-good-soft);
+  color: var(--sg-good-ink);
+}
+.chip.warn {
+  background: var(--sg-warn-soft);
+  color: var(--sg-warn-ink);
+}
+.chip.bad {
+  background: var(--sg-bad-soft);
+  color: var(--sg-bad-ink);
+}
+.chip.accent {
+  background: var(--sg-accent-soft);
+  color: var(--sg-accent-ink);
+}
+.chip.mono {
+  font-family: var(--sg-mono);
+}
+
+.card {
+  background: var(--sg-surface);
+  border: 1px solid var(--sg-line);
+  border-radius: var(--sg-r-lg);
+  padding: var(--sg-5);
+}
+
+.field {
+  margin-bottom: var(--sg-4);
+}
+.field > label:not(.radio) {
+  display: block;
+  font-size: var(--sg-fs-13);
+  line-height: var(--sg-lh-13);
+  font-weight: var(--sg-w-semibold);
+  margin-bottom: var(--sg-1);
+  color: var(--sg-ink);
+}
+
+/* Every text-ish control, including the ones rendered without an explicit
+   type attribute (a bare <input> is type=text but matches no [type] selector,
+   which is why a few fields used to render as raw UA boxes). */
+.input,
+.sg-form select,
+.sg-form textarea,
+.sg-form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]) {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 10px;
+  /* line-strong, not line-2: a control boundary needs 3:1 against the surface (WCAG 1.4.11). */
+  border: 1px solid var(--sg-line-strong);
+  border-radius: var(--sg-r);
+  background: var(--sg-surface);
+  color: var(--sg-ink);
+  font: inherit;
+  font-size: var(--sg-fs-14);
+  line-height: var(--sg-lh-14);
+}
+.sg-form textarea {
+  padding: 8px 10px;
+}
+.input::placeholder,
+.sg-form input::placeholder,
+.sg-form textarea::placeholder {
+  color: var(--sg-muted);
+}
+.input:hover,
+.sg-form select:hover,
+.sg-form textarea:hover,
+.sg-form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):hover {
+  border-color: var(--sg-muted);
+}
+/* Text fields show focus as an accent border plus a soft ring, on any focus
+   (a caret alone is too easy to lose). */
+.input:focus,
+.sg-form select:focus,
+.sg-form textarea:focus,
+.sg-form input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):focus {
+  outline: none;
+  border-color: var(--sg-accent);
+  box-shadow: 0 0 0 3px var(--sg-accent-ring);
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--sg-line-strong);
+  text-underline-offset: 2px;
+}
+
+kbd {
+  font-family: var(--sg-mono);
+  font-size: var(--sg-fs-12);
+  line-height: var(--sg-lh-12);
+  background: var(--sg-sunken);
+  color: var(--sg-ink-soft);
+  border-radius: var(--sg-r-sm);
+  padding: 0 4px;
+}
+
+/* One focus treatment, keyboard only: a 2px accent outline, offset so it never
+   sits on top of the control's own border. */
+:focus-visible {
+  outline: 2px solid var(--sg-accent);
+  outline-offset: 2px;
+}
+
+/* The hidden attribute must beat any component display rule (several of ours
+   are display:flex, which otherwise overrides the UA's [hidden] rule). */
+[hidden] {
+  display: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
