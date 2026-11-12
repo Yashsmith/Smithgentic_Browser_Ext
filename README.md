@@ -14,8 +14,8 @@ A Chrome/Edge extension that reads and acts on web pages with the model of your 
 
 3. Turn on **Developer mode**.
 
-4. Click **Load unpacked** and select the cloned `Smithgentic_Browser_Ext` folder.
-   Select the folder that contains `manifest.json`.
+4. Click **Load unpacked** and select the entire cloned `Smithgentic_Browser_Ext` folder.
+   
 
 5. Pin **Smithgentic Browser**, then click its icon or press `Cmd+E` on macOS / `Ctrl+E` on Windows and Linux.
 
