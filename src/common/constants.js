@@ -53,10 +53,10 @@ export const HISTORY_NOTICE = "Chats are now saved on this device. Manage in Set
 export const TRIMMED_NOTE = "Older messages in this chat weren't kept.";
 
 // Provider "type" determines which wire protocol we speak.
-//   "openai"    -> POST {baseUrl}/chat/completions   (OpenRouter, OpenAI, Ollama,
-//                  Groq, Venice AI, Together, DeepSeek, LM Studio, Google's
-//                  OpenAI-compatible endpoint, and any other OpenAI-compatible
-//                  server)
+//   "openai"    -> POST {baseUrl}/chat/completions   (OpenRouter, OpenAI, Azure
+//                  OpenAI, Ollama, Groq, Venice AI, Together, DeepSeek, LM Studio,
+//                  Google's OpenAI-compatible endpoint, and any other
+//                  OpenAI-compatible server)
 //   "anthropic" -> POST {baseUrl}/messages           (Anthropic Messages API)
 export const PROVIDER_TYPES = ["openai", "anthropic"];
 
@@ -67,8 +67,7 @@ export const PROVIDER_TYPES = ["openai", "anthropic"];
 // of closed / open / budget / light) are a static hint, dated 2026-10-10 (Ollama
 // tags 2026-10-13): they ship with the extension and go stale between releases.
 //
-// `defaultModel` follows the first suggestion (Ollama: the light pick; LM Studio stays empty because its ids depend on what the user downloaded, since
-// the quality pick needs more memory than most laptops have). Dated 2026-10-10
+// `defaultModel` follows the first suggestion (Ollama: the light pick; LM Studio stays empty because its ids depend on what the user downloaded, since the quality pick needs more memory than most laptops have). Dated 2026-10-10
 // (Ollama 2026-10-13).
 export const PROVIDER_PRESETS = [
   {
@@ -97,6 +96,18 @@ export const PROVIDER_PRESETS = [
       { model: "gpt-5.6-luna", label: "GPT-5.6 Luna", kind: "budget", note: "cheapest" },
     ],
   },
+
+  {
+    id: "azure-openai",
+    name: "Azure OpenAI",
+    type: "openai",
+    baseUrl: "",
+    defaultModel: "",
+    keyUrl: "https://portal.azure.com/",
+    hint: "Azure OpenAI v1. Enter your Azure resource endpoint ending in /openai/v1, then use your deployment name as the model.",
+    suggestions: [],
+  },
+
   {
     id: "anthropic",
     name: "Anthropic (Claude)",
