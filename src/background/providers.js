@@ -226,10 +226,152 @@ function shortErr(e) {
 
 function openaiHeaders(provider) {
   const h = { "content-type": "application/json" };
-  if (provider.apiKey) h["authorization"] = `Bearer ${provider.apiKey}`;
+  if (provider.apiKey) {
+    // Azure's v1 REST API documents `api-key` for key auth and Bearer for Entra
+    // tokens. Use one auth scheme, not both.
+    if (isAzureOpenAIProvider(provider) && !looksLikeJwt(provider.apiKey)) h["api-key"] = provider.apiKey;
+    else h["authorization"] = `Bearer ${provider.apiKey}`;
+  }
   // OpenRouter attribution header (harmless for other providers).
   h["x-title"] = "Smithgentic Browser";
   return h;
+}
+
+function hostOf(baseUrl) {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase().replace(/\.$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function isOpenAIProvider(provider) {
+  return provider?.presetId === "openai" || hostOf(provider?.baseUrl) === "api.openai.com";
+}
+
+function isAzureOpenAIProvider(provider) {
+  if (provider?.presetId === "azure-openai") return true;
+  const host = hostOf(provider?.baseUrl);
+  return (
+    host === "openai.azure.com" ||
+    host.endsWith(".openai.azure.com") ||
+    host.endsWith(".services.ai.azure.com") ||
+    host.endsWith(".cognitiveservices.azure.com")
+  );
+}
+
+// Official OpenAI/Azure endpoints follow the newer Chat Completions parameter
+// rules; third-party OpenAI-compatible servers often still want max_tokens.
+function isStrictOpenAI(provider) {
+  return isOpenAIProvider(provider) || isAzureOpenAIProvider(provider);
+}
+
+// o-series and GPT-5/6 reasoning models: max_tokens is rejected and temperature
+// is unsupported. GPT-5.6 additionally requires reasoning_effort "none" when
+// tools are present on Chat Completions.
+function isReasoningModel(model) {
+  return /^(o1|o3|o4|gpt-5|gpt-6)/i.test(String(model || ""));
+}
+
+function isGpt56Model(model) {
+  return /^gpt-5\.6(?:$|-)/i.test(String(model || ""));
+}
+
+function looksLikeJwt(value) {
+  return /^eyJ[\w-]*\.[\w-]*\.[\w-]*$/.test(String(value || ""));
+}
+
+// Build the request body for the current OpenAI parameters. Reasoning models
+// get a larger completion budget because max_completion_tokens also covers
+// reasoning tokens (OpenAI recommends leaving room for them).
+function buildOpenAIBody(provider, opts, origin) {
+  const strict = isStrictOpenAI(provider);
+  const reasoning = strict && isReasoningModel(opts.model);
+  const tools = toOpenAITools(opts.tools);
+  if (tools?.length && strict && /^gpt-6(?:\.1)?-(?:astra|sol)(?:$|-)/i.test(String(opts.model || ""))) {
+    throw new Error("This model does not support tools on Chat Completions. Pick a GPT-5.6 model or use the Responses API.");
+  }
+  const body = {
+    model: opts.model,
+    messages: toOpenAIMessages(opts.messages, opts.system, origin),
+    stream: true,
+  };
+  const maxTokens = Number(opts.maxTokens);
+  if (Number.isFinite(maxTokens) && maxTokens > 0) {
+    const budget = reasoning ? Math.max(maxTokens, 2048) : maxTokens;
+    body[strict ? "max_completion_tokens" : "max_tokens"] = budget;
+  }
+  if (typeof opts.temperature === "number" && !reasoning) body.temperature = opts.temperature;
+  if (tools) {
+    body.tools = tools;
+    if (reasoning && isGpt56Model(opts.model)) body.reasoning_effort = "none";
+  }
+  if (isVeniceUrl(provider.baseUrl)) {
+    // Venice otherwise prepends its own consumer-chat system prompt, which
+    // dilutes the agent's instructions; and reasoning models' <think> blocks
+    // would stream into the chat as visible text.
+    body.venice_parameters = { include_venice_system_prompt: false, strip_thinking_response: true };
+  }
+  return body;
+}
+
+// Older OpenAI-compatible servers reject parameters that official OpenAI now
+// requires (and vice versa). Adjust one parameter per retry from the server's
+// own error, so a model/provider change doesn't require a code change.
+function adjustBodyForError(err, body) {
+  if (!err || (err.status !== 400 && err.status !== 422)) return null;
+  const msg = String(err.message || "");
+  const next = { ...body };
+  const unsupported = /unsupported|not supported|does not support|unknown|invalid|not compatible/i;
+  let changed = false;
+
+  if (/max_tokens/i.test(msg) && (unsupported.test(msg) || /use ['"]?max_completion_tokens/i.test(msg)) && "max_tokens" in next) {
+    next.max_completion_tokens = next.max_tokens;
+    delete next.max_tokens;
+    changed = true;
+  } else if (/max_completion_tokens/i.test(msg) && unsupported.test(msg) && "max_completion_tokens" in next) {
+    next.max_tokens = next.max_completion_tokens;
+    delete next.max_completion_tokens;
+    changed = true;
+  }
+
+  if (/temperature/i.test(msg) && unsupported.test(msg) && "temperature" in next) {
+    delete next.temperature;
+    changed = true;
+  }
+
+  if (/reasoning_effort/i.test(msg)) {
+    if (/function tools|tools .*not supported|set reasoning_effort to ['"]?none/i.test(msg) && Array.isArray(next.tools)) {
+      if (next.reasoning_effort !== "none") {
+        next.reasoning_effort = "none";
+        changed = true;
+      }
+    } else if (unsupported.test(msg) && "reasoning_effort" in next) {
+      delete next.reasoning_effort;
+      changed = true;
+    }
+  }
+
+  return changed ? next : null;
+}
+
+async function postOpenAI(provider, initialBody, signal) {
+  let body = initialBody;
+  let lastErr;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(`${trimSlash(provider.baseUrl)}/chat/completions`, {
+      method: "POST",
+      headers: openaiHeaders(provider),
+      body: JSON.stringify(body),
+      signal,
+    });
+    if (res.ok) return res;
+    lastErr = await httpError(res);
+    const next = adjustBodyForError(lastErr, body);
+    if (!next) throw lastErr;
+    body = next;
+  }
+  throw lastErr;
 }
 
 // Opaque provider data that must go back with the turn that produced it, and
@@ -292,29 +434,8 @@ function toOpenAITools(tools) {
 
 async function callOpenAI(provider, opts) {
   const origin = trimSlash(provider.baseUrl);
-  const body = {
-    model: opts.model,
-    messages: toOpenAIMessages(opts.messages, opts.system, origin),
-    stream: true,
-    max_tokens: opts.maxTokens,
-  };
-  if (typeof opts.temperature === "number") body.temperature = opts.temperature;
-  const tools = toOpenAITools(opts.tools);
-  if (tools) body.tools = tools;
-  if (isVeniceUrl(provider.baseUrl)) {
-    // Venice otherwise prepends its own consumer-chat system prompt, which
-    // dilutes the agent's instructions; and reasoning models' <think> blocks
-    // would stream into the chat as visible text.
-    body.venice_parameters = { include_venice_system_prompt: false, strip_thinking_response: true };
-  }
-
-  const res = await fetch(`${trimSlash(provider.baseUrl)}/chat/completions`, {
-    method: "POST",
-    headers: openaiHeaders(provider),
-    body: JSON.stringify(body),
-    signal: opts.signal,
-  });
-  if (!res.ok) throw await httpError(res);
+  const body = buildOpenAIBody(provider, opts, origin);
+  const res = await postOpenAI(provider, body, opts.signal);
 
   let content = "";
   // Thinking models stream their thoughts in a separate field: "reasoning" on
