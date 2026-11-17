@@ -45,6 +45,20 @@ import { normalizeTarget } from "./permissions.js";
 import { applyMigrations } from "./migrations.js";
 import { openPanel, setPanelBehaviorOnActionClick, jsToolSupported } from "../common/browser.js";
 import { connectBridge, isBridgeGroup } from "./external.js";
+import {
+  startAuditRun,
+  endAuditRun,
+  recordToolStart,
+  recordToolEnd,
+  recordModelEnd,
+  recordError,
+  recordWarning,
+  recordFinish,
+  getAuditSummary,
+  getAuditRun,
+  clearAudit,
+  exportAudit,
+} from "./audit.js";
 
 // -------------------------------------------------------------------------
 // State
@@ -526,6 +540,22 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ ok: true });
       return false;
     }
+    case MSG.AUDIT_GET: {
+      getAuditSummary().then((data) => sendResponse({ ok: true, ...data })).catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      return true;
+    }
+    case MSG.AUDIT_RUN_GET: {
+      getAuditRun(msg.runId).then((run) => sendResponse({ ok: true, run })).catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      return true;
+    }
+    case MSG.AUDIT_CLEAR: {
+      clearAudit().then(() => sendResponse({ ok: true })).catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      return true;
+    }
+    case MSG.AUDIT_EXPORT: {
+      exportAudit().then((json) => sendResponse({ ok: true, json })).catch((e) => sendResponse({ ok: false, error: String(e.message || e) }));
+      return true;
+    }
     case MSG.RUN_SCHEDULED: {
       runScheduledById(msg.id).then(() => sendResponse({ ok: true }));
       return true;
@@ -549,6 +579,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 });
 
 async function handleGetState() {
+  await runMigrations().catch(() => {});
   const { config, provider } = await getActiveProvider();
   await loadLive();
   const seed = pendingSeed;
@@ -663,6 +694,7 @@ async function clearSessions() {
 
 async function handleRunTask(msg) {
   if (currentRun) return { ok: false, error: "A task is already running." };
+  await runMigrations().catch(() => {});
 
   const { config, provider } = await getActiveProvider();
   if (!provider) {
@@ -708,6 +740,31 @@ async function handleRunTask(msg) {
     if (runSession === session) await writeHot();
   };
   const initialTab = await chrome.tabs.get(initialTabId).catch(() => null);
+  await startAuditRun({
+    kind: msg.source === "workflow" ? "workflow" : "chat",
+    prompt: msg.task,
+    tabId: initialTabId,
+    url: initialTab?.url || "",
+    title: initialTab?.title || "",
+    provider: provider.name,
+    model: config.activeModel,
+    autonomy: config.settings.autonomy,
+    siteAccess: config.settings.siteAccess,
+    capabilities: {
+      vision: config.settings.enableVision,
+      js: config.settings.enableJsTool,
+      cdp: config.settings.enableCdp,
+      external: config.settings.enableExternal,
+    },
+  });
+  let auditStatus = "completed";
+  let auditSummary = "";
+  const agentEmit = (ev) => {
+    if (ev.kind === "error") auditStatus = "failed";
+    else if (ev.kind === "aborted") auditStatus = "aborted";
+    else if (ev.kind === "finish" && ev.summary) auditSummary = ev.summary;
+    emitAudited(ev);
+  };
   if (initialTab && isBridgeGroup(initialTab.groupId)) {
     // A local agent's tab: the chat works there without joining or adopting the
     // agent's group, so neither one reaches the other's tabs through it.
@@ -731,7 +788,7 @@ async function handleRunTask(msg) {
     initialTabId,
     startHere: msg.source !== "workflow", // a replay says where to start
     signal: controller.signal,
-    emit,
+    emit: agentEmit,
     requestPermission,
     requestPlanApproval,
     requestContinue,
@@ -739,12 +796,13 @@ async function handleRunTask(msg) {
     groupTab: groupRunTab,
     getGroupId: () => runSession.groupId,
   })
-    .catch((e) => emit({ kind: "error", error: String(e.message || e) }))
+    .catch((e) => agentEmit({ kind: "error", error: String(e.message || e) }))
     .finally(async () => {
       // Detach the debugger (removes the "debugging this browser" banner).
       await detachAll().catch(() => {});
       // Before idle, so whoever waits for idle sees the saved chat.
       await saveRun(runSession, runConversation, saveMeta).catch(() => {});
+      await endAuditRun(auditStatus, { summary: auditSummary }).catch(() => {});
       currentRun = null;
       if (!recording) stopKeepAlive(); // an active recording still needs it
       emit({ kind: "idle" });
@@ -861,6 +919,7 @@ async function runScheduledTask(task) {
     notify(task.name, "Skipped — another task was already running.");
     return;
   }
+  await runMigrations().catch(() => {});
   const { config, provider } = await getActiveProvider();
   if (!provider || !config.activeModel) {
     notify(task.name, "Skipped — no model configured.");
@@ -893,6 +952,25 @@ async function runScheduledTask(task) {
   const controller = new AbortController();
   currentRun = { controller, chat: false }; // never recorded in chat history
   startKeepAlive();
+  let auditTab = null;
+  try { auditTab = await chrome.tabs.get(tabId); } catch { /* ignore */ }
+  await startAuditRun({
+    kind: "scheduled",
+    prompt: task.prompt,
+    tabId,
+    url: auditTab?.url || "",
+    title: auditTab?.title || "",
+    provider: provider.name,
+    model: config.activeModel,
+    autonomy: "auto",
+    siteAccess: config.settings.siteAccess,
+    capabilities: {
+      vision: config.settings.enableVision,
+      js: config.settings.enableJsTool,
+      cdp: config.settings.enableCdp,
+      external: config.settings.enableExternal,
+    },
+  });
   const conversation = [{ role: "user", content: task.prompt }];
   let summary = "";
   let errored = false;
@@ -906,6 +984,7 @@ async function runScheduledTask(task) {
       initialTabId: tabId,
       signal: controller.signal,
       emit: (ev) => {
+        emitAudited(ev);
         if (ev.kind === "finish" && ev.summary) summary = ev.summary;
         else if (ev.kind === "assistant_end" && ev.content) summary = ev.content;
         else if (ev.kind === "error") {
@@ -936,6 +1015,7 @@ async function runScheduledTask(task) {
     currentRun = null;
     if (!recording) stopKeepAlive();
   }
+  await endAuditRun(errored ? "failed" : "completed", { summary }).catch(() => {});
   await finishScheduledRun(task, summary, errored);
 }
 
@@ -1047,6 +1127,39 @@ function requestContinue(steps) {
       resolve(false);
     });
   });
+}
+
+const auditToolArgs = new Map();
+function emitAudited(event) {
+  try {
+    if (event.kind === "tool_start") {
+      auditToolArgs.set(event.name, event.args);
+      void recordToolStart(event.name, event.args);
+    } else if (event.kind === "tool_end") {
+      const args = auditToolArgs.get(event.name);
+      auditToolArgs.delete(event.name);
+      void recordToolEnd({ ...event, args });
+    } else if (event.kind === "model_end") {
+      void recordModelEnd(event);
+    } else if (event.kind === "error") {
+      void recordError(event.error, "agent");
+    } else if (event.kind === "warning") {
+      void recordWarning(event.text);
+    } else if (event.kind === "finish") {
+      void recordToolEnd({
+        name: event.question ? "ask_user" : "finish",
+        ok: true,
+        summary: event.summary || "",
+        detail: { question: !!event.question },
+      });
+      void recordFinish(event.summary);
+    } else if (event.kind === "aborted") {
+      void recordWarning("Stopped by user.");
+    }
+  } catch {
+    /* audit must never break a run */
+  }
+  emit(event);
 }
 
 function emit(event) {

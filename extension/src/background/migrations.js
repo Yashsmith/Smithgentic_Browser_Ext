@@ -23,6 +23,16 @@ export function applyMigrations(stored) {
     changed = true;
   }
 
+  // JS + console/network became part of the default browser toolkit. Turn them
+  // on for configs saved before that, once; a later opt-out stays off.
+  if (!migrations.browserToolsDefault) {
+    config.settings = config.settings || {};
+    if (config.settings.enableJsTool === false) config.settings.enableJsTool = true;
+    if (config.settings.enableCdp === false) config.settings.enableCdp = true;
+    migrations.browserToolsDefault = true;
+    changed = true;
+  }
+
   // The step limit became a checkpoint (the panel asks to keep going) and its
   // default went from 25 to 100. Lift configs still on the old default, once.
   if (!migrations.maxSteps100) {

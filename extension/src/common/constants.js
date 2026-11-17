@@ -3,6 +3,7 @@
 // NOTE: the content script is NOT a module and cannot import this file — keep
 // any values it needs duplicated there intentionally.
 
+export const AUDIT_KEY = "smithgentic:audit";
 export const STORAGE_KEY = "smithgentic.config.v1";
 
 // chrome.storage.local key for scheduled-run bookkeeping (what each task last
@@ -221,9 +222,9 @@ export const DEFAULT_SETTINGS = {
   // On by default (matches other browser agents); turn off for text-only models.
   enableVision: true,
   // Expose a run_javascript escape-hatch tool (runs code in the page).
-  enableJsTool: false,
+  enableJsTool: true,
   // Expose console/network reading via Chrome's debugger (shows a banner).
-  enableCdp: false,
+  enableCdp: true,
   // Let local agents (Claude Code, Codex, …) use the browser tools through the
   // native bridge. Connections, new sites and risky actions are approved in the side panel.
   enableExternal: false,
@@ -320,6 +321,11 @@ export const MSG = {
   CLEAR_SESSIONS: "clear_sessions",
   // worker -> side panel
   AGENT_EVENT: "agent_event", // { kind, ... } streamed progress
+  AUDIT_EVENT: "audit_event",
+  AUDIT_GET: "audit_get",
+  AUDIT_RUN_GET: "audit_run_get",
+  AUDIT_CLEAR: "audit_clear",
+  AUDIT_EXPORT: "audit_export",
   PERMISSION_REQUEST: "permission_request",
   PERMISSION_CANCEL: "permission_cancel",
   BRIDGE_ACTIVITY: "bridge_activity",

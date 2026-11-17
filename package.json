@@ -1,6 +1,6 @@
 {
   "name": "smithgentic-browser",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Smithgentic Browser: Chrome/Edge AI agent with side panel, providers, DOM, vision and CV browser control",
   "private": true,
   "type": "module",

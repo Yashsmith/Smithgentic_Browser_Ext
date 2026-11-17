@@ -296,6 +296,7 @@ function buildOpenAIBody(provider, opts, origin) {
     messages: toOpenAIMessages(opts.messages, opts.system, origin),
     stream: true,
   };
+  if (strict) body.stream_options = { include_usage: true };
   const maxTokens = Number(opts.maxTokens);
   if (Number.isFinite(maxTokens) && maxTokens > 0) {
     const budget = reasoning ? Math.max(maxTokens, 2048) : maxTokens;
@@ -337,6 +338,11 @@ function adjustBodyForError(err, body) {
 
   if (/temperature/i.test(msg) && unsupported.test(msg) && "temperature" in next) {
     delete next.temperature;
+    changed = true;
+  }
+
+  if (/stream_options/i.test(msg) && "stream_options" in next) {
+    delete next.stream_options;
     changed = true;
   }
 
@@ -438,6 +444,7 @@ async function callOpenAI(provider, opts) {
   const res = await postOpenAI(provider, body, opts.signal);
 
   let content = "";
+  let usage = null;
   // Thinking models stream their thoughts in a separate field: "reasoning" on
   // Ollama, "reasoning_content" on vLLM, LM Studio and DeepSeek-style servers.
   // Kept apart from content and never streamed to onDelta.
@@ -454,6 +461,7 @@ async function callOpenAI(provider, opts) {
     } catch {
       continue;
     }
+    if (json.usage) usage = normalizeUsage(json.usage);
     const choice = json.choices && json.choices[0];
     if (!choice) continue;
     const delta = choice.delta || {};
@@ -489,6 +497,7 @@ async function callOpenAI(provider, opts) {
     toolCalls,
     stopReason: toolCalls.length ? "tool_use" : stopReason || "stop",
     reasoning,
+    ...(usage ? { usage } : {}),
   };
   if (reasoningDetails.length) result.replay = { origin, reasoning_details: reasoningDetails };
   return result;
@@ -615,6 +624,7 @@ async function callAnthropic(provider, opts) {
   let content = "";
   const blocks = new Map(); // index -> { type, name, id, jsonChunks: [] }
   let stopReason = null;
+  let usage = null;
 
   for await (const evt of sseStream(res)) {
     let json;
@@ -624,6 +634,18 @@ async function callAnthropic(provider, opts) {
       continue;
     }
     switch (json.type) {
+      case "message_start": {
+        const u = json.message?.usage;
+        if (u) {
+          usage = {
+            prompt: Number(u.input_tokens || 0),
+            completion: Number(u.output_tokens || 0),
+            total: Number(u.input_tokens || 0) + Number(u.output_tokens || 0),
+            estimated: false,
+          };
+        }
+        break;
+      }
       case "content_block_start": {
         const cb = json.content_block || {};
         blocks.set(json.index, {
@@ -647,6 +669,11 @@ async function callAnthropic(provider, opts) {
       }
       case "message_delta": {
         if (json.delta?.stop_reason) stopReason = json.delta.stop_reason;
+        if (json.usage) {
+          const completion = Number(json.usage.output_tokens ?? usage?.completion ?? 0);
+          const prompt = Number(json.usage.input_tokens ?? usage?.prompt ?? 0);
+          usage = { prompt, completion, total: prompt + completion, estimated: false };
+        }
         break;
       }
       case "error": {
@@ -667,12 +694,22 @@ async function callAnthropic(provider, opts) {
     toolCalls,
     stopReason: toolCalls.length ? "tool_use" : stopReason || "end_turn",
     reasoning: "",
+    ...(usage ? { usage } : {}),
   };
 }
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+function normalizeUsage(u) {
+  if (!u || typeof u !== "object") return null;
+  const prompt = Number(u.prompt_tokens ?? u.input_tokens ?? u.promptTokens ?? 0);
+  const completion = Number(u.completion_tokens ?? u.output_tokens ?? u.completionTokens ?? 0);
+  const total = Number(u.total_tokens ?? u.totalTokens ?? prompt + completion);
+  if (!prompt && !completion && !total) return null;
+  return { prompt, completion, total, estimated: false };
+}
 
 // Async generator that yields the `data:` payload of each SSE event.
 async function* sseStream(res) {

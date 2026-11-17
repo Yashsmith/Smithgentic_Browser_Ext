@@ -119,7 +119,7 @@ export const TOOL_DEFS = [
   },
   {
     name: "scroll",
-    description: "Scroll the page or a specific element into view.",
+    description: "Scroll the page or a specific element into view. Returns moved, atTop and atBottom. If moved is false, do not repeat the same scroll; use scroll_at, a ref, read_page again, or finish.",
     parameters: {
       type: "object",
       properties: {

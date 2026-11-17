@@ -57,6 +57,28 @@ export async function readNetwork(tabId, opts = {}) {
   if (!cdpAvailable()) return NO_DEBUGGER;
   await ensureAttached(tabId);
   let items = [...attached.get(tabId).network.values()];
+  let source = "debugger";
+  if (!items.length) {
+    // The debugger misses requests made before it attached. The page's own
+    // Performance API still has the load-time resources.
+    try {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => performance.getEntriesByType("resource").slice(-200).map((e) => ({
+          method: "GET",
+          url: e.name,
+          status: null,
+          mimeType: e.initiatorType || "",
+          duration: Math.round(e.duration || 0),
+          transferSize: e.transferSize || 0,
+        })),
+      });
+      items = Array.isArray(res?.result) ? res.result : [];
+      source = "performance";
+    } catch {
+      /* restricted page */
+    }
+  }
   if (urlPattern) {
     let re;
     try {
@@ -70,7 +92,12 @@ export async function readNetwork(tabId, opts = {}) {
     ok: true,
     monitoring: true,
     requests: items.slice(-limit),
-    note: items.length ? undefined : "No network requests captured yet — reload the page and read again.",
+    source,
+    note: items.length
+      ? source === "performance"
+        ? "From the page's Performance API (load-time resources). Live monitoring starts now."
+        : undefined
+      : "No network requests captured yet — reload the page and read again.",
   };
 }
 

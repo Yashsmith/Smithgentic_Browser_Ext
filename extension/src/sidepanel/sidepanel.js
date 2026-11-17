@@ -59,6 +59,20 @@ const els = {
   jumpLatest: document.getElementById("jump-latest"),
   modelLine: document.getElementById("model-line"),
   modelChip: document.getElementById("model-chip"),
+  auditBtn: document.getElementById("audit-btn"),
+  auditMenu: document.getElementById("audit-menu"),
+  auditOverall: document.getElementById("audit-overall"),
+  auditRuns: document.getElementById("audit-runs"),
+  auditList: document.getElementById("audit-list"),
+  auditSearch: document.getElementById("audit-search"),
+  auditTabs: document.getElementById("audit-tabs"),
+  auditStatus: document.getElementById("audit-status"),
+  auditRunTitle: document.getElementById("audit-run-title"),
+  auditRunMeta: document.getElementById("audit-run-meta"),
+  auditRunLabel: document.getElementById("audit-run-label"),
+  auditExport: document.getElementById("audit-export"),
+  auditClear: document.getElementById("audit-clear"),
+  auditClose: document.getElementById("audit-close"),
 };
 
 let savedPrompts = [];
@@ -82,6 +96,16 @@ let newChatPending = false;
 let current = null; // { el, raw } assistant bubble being streamed
 let pendingTools = []; // log rows awaiting their matching tool_end
 let logGroup = null; // the open <details> run of consecutive tool rows
+
+let auditOpen = false;
+let auditSummary = null;
+let auditRun = null;
+let auditSelectedRunId = null;
+let auditFilter = "all";
+let auditSearchText = "";
+let auditRefreshTimer = 0;
+let auditRefreshSeq = 0;
+let liveTokens = 0;
 
 // The copy control's feedback, keyed by state. Label and accessible name come from
 // the state, so a streaming message carries only the state across a re-render and
@@ -131,6 +155,8 @@ async function init() {
     else if (msg.type === MSG.RECORDING_STEP) {
       recCount = msg.count || recCount + 1;
       updateRecBanner();
+    } else if (msg.type === MSG.AUDIT_EVENT) {
+      if (auditOpen) scheduleAuditRefresh();
     }
   });
 
@@ -172,6 +198,12 @@ async function init() {
   els.messages.addEventListener("scroll", onMessagesScroll, { passive: true });
   // The copy control is inside the rendered code block, so it is wired by delegation.
   els.messages.addEventListener("click", (e) => {
+    const log = e.target.closest(".log-row[data-tool-name]");
+    if (log) {
+      e.preventDefault();
+      void openAuditForTool(log.dataset.toolName);
+      return;
+    }
     const btn = e.target.closest(".md-copy");
     if (!btn) return;
     if (btn.dataset.state) return; // the feedback is showing; ignore a second click
@@ -222,6 +254,24 @@ async function init() {
   els.input.addEventListener("blur", () => setTimeout(hideSlashMenu, 150));
   els.stop.addEventListener("click", () => send({ type: MSG.STOP_TASK }));
   els.newChat.addEventListener("click", newChat);
+  els.auditBtn.addEventListener("click", toggleAudit);
+  els.auditMenu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeAudit();
+  });
+  els.auditClose.addEventListener("click", closeAudit);
+  els.auditClear.addEventListener("click", clearAuditLogs);
+  els.auditExport.addEventListener("click", exportAuditLogs);
+  els.auditSearch.addEventListener("input", () => {
+    auditSearchText = els.auditSearch.value.trim().toLowerCase();
+    renderAuditTimeline();
+  });
+  els.auditTabs.addEventListener("click", (e) => {
+    const tab = e.target.closest(".audit-tab");
+    if (!tab) return;
+    auditFilter = tab.dataset.filter || "all";
+    els.auditTabs.querySelectorAll(".audit-tab").forEach((b) => b.classList.toggle("on", b === tab));
+    renderAuditTimeline();
+  });
   els.settings.addEventListener("click", () => chrome.runtime.openOptionsPage());
   els.modelChip.addEventListener("click", () => chrome.runtime.openOptionsPage());
   if (els.setupLink) els.setupLink.addEventListener("click", (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
@@ -571,6 +621,9 @@ function resetChatView() {
 // Event handling
 // -------------------------------------------------------------------------
 function handleEvent(ev) {
+  if (auditOpen && ["tool_end", "model_end", "warning", "error", "finish", "done", "idle"].includes(ev.kind)) {
+    scheduleAuditRefresh();
+  }
   switch (ev.kind) {
     case "seed":
       if (!running) {
@@ -590,6 +643,10 @@ function handleEvent(ev) {
       break;
     case "assistant_end":
       endAssistant(ev.content);
+      break;
+    case "model_end":
+      liveTokens += Number(ev.usage?.total || 0);
+      if (running) setStatus(`Working… · ${fmtNum(liveTokens)} tokens`);
       break;
     case "tool_start":
       addToolStart(ev.name, ev.args);
@@ -641,6 +698,7 @@ function handleEvent(ev) {
 
 function setRunning(v) {
   const changed = running !== v;
+  if (v && !running) liveTokens = 0;
   running = v;
   if (changed) refreshHistoryMenu(true);
   els.send.disabled = v;
@@ -794,6 +852,8 @@ function addToolStart(name, args) {
   logSummary(g);
   const row = document.createElement("div");
   row.className = "log-row running";
+  row.dataset.toolName = name;
+  row.title = "Open full audit log for this action";
   row.innerHTML = logRow(name, argHint(name, args), "");
   g.rows.appendChild(row);
   pendingTools.push({ name, el: row, t0: performance.now() });
@@ -810,6 +870,8 @@ function addToolEnd(name, ok, summary) {
     row = document.createElement("div");
     g.rows.appendChild(row);
   }
+  row.dataset.toolName = name;
+  row.title = "Open full audit log for this action";
   row.className = "log-row " + (ok ? "ok" : "err");
   row.innerHTML = logRow(name, summary || "", pending ? fmtDur(performance.now() - pending.t0) : "");
   scroll();
@@ -1771,6 +1833,236 @@ function scroll() {
 // fetch, no icon font, nothing for the MV3 CSP to block.
 function ic(name) {
   return `<svg class="ic" aria-hidden="true"><use href="#ic-${name}"/></svg>`;
+}
+
+// -------------------------------------------------------------------------
+// Audit & analytics
+// -------------------------------------------------------------------------
+function fmtNum(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
+  if (v >= 1e6) return (v / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
+  if (v >= 1e4) return (v / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  return String(Math.round(v));
+}
+function fmtTime(at) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function fmtAuditDate(at) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+function setAuditStatus(text) {
+  if (els.auditStatus) els.auditStatus.textContent = text || "";
+}
+function toggleAudit() {
+  if (auditOpen) {
+    closeAudit();
+    return;
+  }
+  auditFilter = "all";
+  auditSearchText = "";
+  els.auditSearch.value = "";
+  els.auditTabs.querySelectorAll(".audit-tab").forEach((b) => b.classList.toggle("on", b.dataset.filter === "all"));
+  void openAudit();
+}
+async function openAuditForTool(name) {
+  if (auditSummary?.runs?.[0]) auditSelectedRunId = auditSummary.runs[0].id;
+  auditFilter = "all";
+  auditSearchText = String(name || "").toLowerCase();
+  els.auditSearch.value = name || "";
+  els.auditTabs.querySelectorAll(".audit-tab").forEach((b) => b.classList.toggle("on", b.dataset.filter === "all"));
+  if (!auditOpen) await openAudit();
+  else await refreshAudit();
+}
+async function openAudit() {
+  auditOpen = true;
+  els.auditMenu.hidden = false;
+  els.auditBtn.setAttribute("aria-expanded", "true");
+  els.auditMenu.focus();
+  await refreshAudit();
+}
+function closeAudit() {
+  auditOpen = false;
+  els.auditMenu.hidden = true;
+  els.auditBtn.setAttribute("aria-expanded", "false");
+  els.auditBtn.focus();
+}
+function scheduleAuditRefresh() {
+  if (!auditOpen) return;
+  clearTimeout(auditRefreshTimer);
+  auditRefreshTimer = setTimeout(() => void refreshAudit(), 350);
+}
+async function refreshAudit() {
+  const seq = ++auditRefreshSeq;
+  const data = await send({ type: MSG.AUDIT_GET });
+  if (seq !== auditRefreshSeq || !auditOpen) return;
+  if (!data || data.ok === false) {
+    setAuditStatus(data?.error || "Could not load audit logs.");
+    return;
+  }
+  auditSummary = data;
+  if (!auditSelectedRunId || !data.runs.some((r) => r.id === auditSelectedRunId)) {
+    auditSelectedRunId = data.activeRunId || data.runs[0]?.id || null;
+  }
+  renderAuditOverall();
+  renderAuditRuns();
+  if (auditSelectedRunId) {
+    const runRes = await send({ type: MSG.AUDIT_RUN_GET, runId: auditSelectedRunId });
+    if (seq !== auditRefreshSeq || !auditOpen) return;
+    if (runRes?.ok && runRes.run) auditRun = runRes.run;
+  } else {
+    auditRun = null;
+  }
+  renderAuditRunHead();
+  renderAuditTimeline();
+  setAuditStatus(data.activeRunId ? "Live run in progress." : "Local only. Nothing leaves this browser.");
+}
+function renderAuditOverall() {
+  const o = auditSummary?.overall || {};
+  const latest = auditSummary?.runs?.[0];
+  const stats = [
+    ["Runs", fmtNum(o.runs), "chat + scheduled"],
+    ["Tokens", fmtNum(o.totalTokens), `${fmtNum(o.promptTokens)} in / ${fmtNum(o.completionTokens)} out`],
+    ["Model calls", fmtNum(o.modelCalls), `${fmtNum(o.estimatedTokenCalls)} estimated`],
+    ["Tool calls", fmtNum(o.toolCalls), `${fmtNum(o.toolErrors)} failed`],
+    ["Vision", fmtNum(o.visionCalls), "screenshots + crops"],
+    ["OCR", fmtNum(o.ocrCalls), `${fmtNum(o.ocrLines)} lines`],
+    ["Network", fmtNum(o.networkReads), `${fmtNum(o.networkRequests)} requests`],
+    ["Console", fmtNum(o.consoleReads), `${fmtNum(o.consoleMessages)} messages`],
+    ["JavaScript", fmtNum(o.jsRuns), "run_javascript"],
+    ["Errors", fmtNum((o.errors || 0) + (o.toolErrors || 0)), "model + tool"],
+  ];
+  const toolBreakdown = Object.entries(o.byTool || {})
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 18)
+    .map(([name, count]) => `${name} ${count}`)
+    .join(" · ");
+  els.auditOverall.innerHTML = stats
+    .map(([k, v, sub]) => `<div class="audit-stat" title="${escapeHtml(sub)}"><span class="k">${escapeHtml(k)}</span><span class="v">${escapeHtml(v)}</span><span class="s">${escapeHtml(sub)}</span></div>`)
+    .join("") +
+    `<div class="audit-stat" style="grid-column:1/-1"><span class="k">Tool breakdown</span><span class="v" style="font-family:inherit;font-weight:400;font-size:10px;white-space:normal">${escapeHtml(toolBreakdown || "No tools called yet")}</span></div>` +
+    (latest?.capabilities
+      ? `<div class="audit-stat" style="grid-column:1/-1"><span class="k">Capabilities (latest run)</span><span class="v" style="font-family:inherit;font-weight:400;font-size:10px;white-space:normal">vision ${latest.capabilities.vision ? "on" : "off"} · JS ${latest.capabilities.js ? "on" : "off"} · console/network ${latest.capabilities.cdp ? "on" : "off"} · local agents ${latest.capabilities.external ? "on" : "off"}</span></div>`
+      : "");
+}
+function renderAuditRuns() {
+  const runs = auditSummary?.runs || [];
+  if (!runs.length) {
+    els.auditRuns.innerHTML = `<div class="audit-empty">No runs yet. Send a task.</div>`;
+    return;
+  }
+  els.auditRuns.innerHTML = runs
+    .map((r) => {
+      const tokens = r.tokens?.total || 0;
+      return `<button type="button" class="audit-run-card${r.id === auditSelectedRunId ? " on" : ""}" data-run-id="${escapeHtml(r.id)}">
+        <span class="rr-top"><strong>${escapeHtml(fmtAuditDate(r.startedAt))}</strong><span class="rr-status ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span></span>
+        <span class="rr-prompt">${escapeHtml(r.promptPreview || r.summary || "(no prompt)")}</span>
+        <span class="rr-prompt">${escapeHtml(r.model || "no model")} · ${fmtNum(tokens)} tok · ${fmtNum(r.toolCalls)} tools</span>
+        <span class="rr-prompt">${fmtNum(r.vision?.count)} vision · ${fmtNum(r.ocr?.count)} OCR · ${fmtNum(r.network?.count)} net · ${fmtNum(r.console?.count)} console · ${fmtNum(r.js?.count)} JS</span>
+      </button>`;
+    })
+    .join("");
+  els.auditRuns.querySelectorAll(".audit-run-card").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      auditSelectedRunId = btn.dataset.runId;
+      void selectAuditRun(auditSelectedRunId);
+    });
+  });
+}
+async function selectAuditRun(id) {
+  auditSelectedRunId = id;
+  const res = await send({ type: MSG.AUDIT_RUN_GET, runId: id });
+  if (!auditOpen) return;
+  auditRun = res?.ok ? res.run : null;
+  renderAuditRuns();
+  renderAuditRunHead();
+  renderAuditTimeline();
+}
+function renderAuditRunHead() {
+  if (!auditRun) {
+    els.auditRunTitle.textContent = "No run selected";
+    els.auditRunMeta.textContent = "";
+    return;
+  }
+  const duration = auditRun.endedAt ? auditRun.endedAt - auditRun.startedAt : Date.now() - auditRun.startedAt;
+  els.auditRunTitle.textContent = `${fmtAuditDate(auditRun.startedAt)} · ${auditRun.status}`;
+  els.auditRunMeta.textContent = `${auditRun.model || "no model"} · ${fmtNum(auditRun.tokens?.total)} tok · ${fmtDur(duration)} · ${auditRun.toolCalls} tools`;
+  els.auditRunLabel.textContent = auditRun.status === "running" ? "Live" : auditRun.status;
+}
+function auditMatchesFilter(e) {
+  const name = e.name || "";
+  switch (auditFilter) {
+    case "tools": return e.kind === "tool";
+    case "model": return e.kind === "model";
+    case "vision": return name === "take_screenshot" || name === "inspect_region";
+    case "ocr": return name === "read_image_text";
+    case "network": return name === "read_network" || name === "read_console";
+    case "errors": return e.ok === false || e.kind === "error" || e.kind === "warning";
+    default: return true;
+  }
+}
+function renderAuditTimeline() {
+  const list = els.auditList;
+  const nearBottom = list.scrollHeight - list.scrollTop - list.clientHeight < 40;
+  const timeline = auditRun?.timeline || [];
+  const q = auditSearchText;
+  const rows = timeline.filter((e) => {
+    if (!auditMatchesFilter(e)) return false;
+    if (!q) return true;
+    const hay = [e.kind, e.name, e.summary, e.detail ? JSON.stringify(e.detail) : ""].join(" ").toLowerCase();
+    return hay.includes(q);
+  });
+  if (!rows.length) {
+    els.auditList.innerHTML = `<div class="audit-empty">${timeline.length ? "No entries match this filter." : "No events recorded for this run yet."}</div>`;
+    return;
+  }
+  list.innerHTML = rows
+    .map((e) => {
+      const cls = e.ok === false ? "err" : e.kind === "warning" ? "warn" : "";
+      const detail = e.detail ? JSON.stringify(e.detail, null, 2) : "";
+      const detailHtml = detail ? `<pre>${escapeHtml(detail.length > 12000 ? detail.slice(0, 12000) + "\n…" : detail)}</pre>` : "";
+      return `<details class="audit-row ${cls}">
+        <summary><span class="a-time">${escapeHtml(fmtTime(e.at))}</span><span class="a-kind">${escapeHtml(e.kind)}</span><span class="a-name">${escapeHtml(e.name || "")}</span><span class="a-summary">${escapeHtml(e.summary || "")}</span><span class="a-dur">${e.durationMs ? escapeHtml(fmtDur(e.durationMs)) : ""}</span></summary>
+        ${detailHtml}
+      </details>`;
+    })
+    .join("");
+  if (nearBottom) list.scrollTop = list.scrollHeight;
+}
+async function clearAuditLogs() {
+  if (!window.confirm("Clear all audit logs and analytics? This cannot be undone.")) return;
+  const res = await send({ type: MSG.AUDIT_CLEAR });
+  if (!res?.ok) {
+    setAuditStatus(res?.error || "Could not clear logs.");
+    return;
+  }
+  auditSummary = null;
+  auditRun = null;
+  auditSelectedRunId = null;
+  await refreshAudit();
+  setAuditStatus("Audit logs cleared.");
+}
+async function exportAuditLogs() {
+  const res = await send({ type: MSG.AUDIT_EXPORT });
+  if (!res?.ok || !res.json) {
+    setAuditStatus(res?.error || "Could not export logs.");
+    return;
+  }
+  const blob = new Blob([res.json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  a.href = url;
+  a.download = `smithgentic-audit-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  setAuditStatus("Exported audit JSON.");
 }
 
 function send(msg) {

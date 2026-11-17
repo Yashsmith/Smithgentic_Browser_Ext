@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Smithgentic Browser",
   "short_name": "Smithgentic",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "AI browser agent that reads and acts on web pages using any model you choose. Your keys stay in your browser.",
   "author": "Smithgentic",
   "minimum_chrome_version": "116",

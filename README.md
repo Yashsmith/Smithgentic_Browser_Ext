@@ -4,6 +4,9 @@ A Chrome/Edge AI browser agent with a side panel. Use your own API key and model
 
 It reads and controls the page with DOM refs, open Shadow DOM, same-origin iframes, screenshots, local OCR, and real coordinate input for canvas and visual-only UIs.
 
+The side panel includes an **Audit & analytics** button: tokens, vision, OCR, network/console reads, JavaScript, tool calls, errors and a timestamped per-run log.
+
+
 ## Install
 
 1. Clone the repo.
@@ -44,6 +47,6 @@ The extension itself loads without a build. The build compiles the optional back
 
 ```text
 extension/   Loadable Chrome/Edge extension
-src/         Optional standalone browser-control / vision library
+src/         Optional standalone browser automation / vision library
 scripts/     OCR asset build
 ```

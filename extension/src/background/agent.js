@@ -31,6 +31,8 @@ How to work:
 - A refusal from Smithgentic Browser's safety rules, a blocked site or an action the user declined is final: don't look for a way around it; tell the user.
 - Don't claim you can't do things you can (browse, open sites, read pages, fill forms). You may still decline or ask before anything risky; say why.
 - Take the smallest number of steps needed. Do not repeat an action that already succeeded.
+- If scroll returns moved:false, do NOT scroll the same way again. Use scroll_at on the area that needs to move, use a ref, read the page again, or call finish. If it returns atBottom/atTop, that direction is finished.
+- If a tool returns the same result twice, change approach: a different element, a different tool, a different page, or finish with what you have.
 - If a page requires a login the user hasn't given you or a CAPTCHA, stop and ask the user to handle it — never attempt to bypass these.
 - When the user asks you to order or buy something, do the whole job up to payment: find the exact items, add them to the cart, fill in the delivery or pickup details they gave you, and go through the checkout steps. Stop at the payment step (the page that asks for card details or shows a saved card, or has the final Pay or Place order button): tell the user the site, what is in the order and the total, and ask them to review it and pay. Press the final pay or place-order button only if the user clearly asked you to complete the purchase, and first tell them the site, the items and the total. Smithgentic Browser asks before many such clicks, but not all of them.
 - When the task is done or you are blocked, call finish with a concise summary for the user.
@@ -236,6 +238,32 @@ export async function runAgent(deps) {
   const outcomes = []; // [signature, result] of the last calls that ran, for (F2)
   const stuckPair = new Set(); // the two signatures of a detected two-step cycle
   let loopWarned = false;
+  const repeats = new Map(); // signature -> { fingerprint, count }
+  let repeatedBlocks = 0;
+  let lastProgressKey = null;
+  let noProgress = 0;
+  let progressNudges = 0;
+  const noteRepeat = (signature, result) => {
+    const fingerprint = resultFingerprint(result);
+    const prev = repeats.get(signature);
+    if (prev && prev.fingerprint === fingerprint) prev.count++;
+    else repeats.set(signature, { fingerprint, count: 1 });
+  };
+  const noteProgress = (name, result) => {
+    const key = progressKey(name, result);
+    if (!key) return null;
+    if (key === lastProgressKey) {
+      noProgress++;
+    } else {
+      lastProgressKey = key;
+      noProgress = 0;
+      return null;
+    }
+    if (noProgress < 5) return null;
+    noProgress = 0;
+    progressNudges++;
+    return progressNudges >= 3 ? "stop" : "nudge";
+  };
   const declinedServers = new Set(); // MCP servers the user refused, for this run
   const ctx = {
     getTabId: async () => focusedTabId,
@@ -254,7 +282,7 @@ export async function runAgent(deps) {
     emit({ kind: "planning" });
     let plan = null;
     try {
-      plan = await makePlan(provider, config, conversation, signal, identity.plan, where);
+      plan = await makePlan(provider, config, conversation, signal, identity.plan, where, emit);
     } catch {
       plan = null; // if planning fails, fall through and run normally
     }
@@ -304,18 +332,46 @@ export async function runAgent(deps) {
 
     emit({ kind: "assistant_start" });
     let result;
+    const modelMessages = compactForModel(conversation);
+    const modelStarted = performance.now();
     try {
       result = await callModel(provider, {
         model: config.activeModel,
         system: SYSTEM_PROMPT + identity.main + where,
-        messages: compactForModel(conversation),
+        messages: modelMessages,
         tools,
         maxTokens: config.settings.maxTokens,
         temperature: config.settings.temperature,
         signal,
         onDelta: (t) => emit({ kind: "assistant_delta", text: t }),
       });
+      emit({
+        kind: "model_end",
+        step: step + 1,
+        model: config.activeModel,
+        provider: provider.name,
+        usage: result.usage || estimateUsage(modelMessages, SYSTEM_PROMPT + identity.main + where, result),
+        durationMs: Math.round(performance.now() - modelStarted),
+        toolCalls: (result.toolCalls || []).length,
+        images: countImages(modelMessages),
+        finishReason: result.stopReason || "",
+        contentChars: String(result.content || "").length,
+        contentPreview: String(result.content || "").slice(0, 1000),
+      });
     } catch (e) {
+      emit({
+        kind: "model_end",
+        step: step + 1,
+        model: config.activeModel,
+        provider: provider.name,
+        ok: false,
+        usage: { prompt: 0, completion: 0, total: 0, estimated: true },
+        durationMs: Math.round(performance.now() - modelStarted),
+        toolCalls: 0,
+        images: countImages(modelMessages),
+        finishReason: "error",
+        contentChars: 0,
+      });
       if (signal.aborted) {
         emit({ kind: "aborted" });
         return;
@@ -428,6 +484,24 @@ export async function runAgent(deps) {
       // agent is told to run, and a window-based rule refuses its fourth read
       // while claiming nothing had changed between them.
       const signature = JSON.stringify([call.name, call.args || {}]);
+      const repeated = repeats.get(signature);
+      if (repeated && repeated.count >= 2) {
+        repeatedBlocks++;
+        pushToolResult(conversation, call, {
+          ok: false,
+          error:
+            "This exact call already returned the same result twice. Do not repeat it — change approach: a different element, a different tool, scroll_at, read_page again, or finish.",
+        });
+        emit({ kind: "tool_end", name: call.name, ok: false, summary: "skipped: identical result twice", durationMs: 0, detail: { repeat: true } });
+        emit({ kind: "warning", text: `Skipped ${call.name}: it returned the same result twice. Nudged the agent to change approach.` });
+        if (repeatedBlocks >= 3) {
+          emit({ kind: "warning", text: "Stopped: the agent kept repeating calls with identical results." });
+          emit({ kind: "finish", summary: "Stopped because the same steps kept returning the same result. Try a different instruction, or open the page manually and continue." });
+          emit({ kind: "done" });
+          return;
+        }
+        continue;
+      }
       const recent = executed.slice(-3);
       if (!LOOP_EXEMPT.has(call.name) && recent.length === 3 && recent.every((s) => s === signature)) {
         pushToolResult(conversation, call, {
@@ -509,12 +583,25 @@ export async function runAgent(deps) {
           toolResult = { ok: false, error: "MCP tool failed: " + (e.message || e) };
         }
         pushToolResult(conversation, call, toolResult);
+        noteRepeat(signature, toolResult);
         emit({
           kind: "tool_end",
           name: call.name,
           ok: toolResult.ok !== false,
           summary: toolResult.ok ? String(toolResult.result || "").slice(0, 60) : toolResult.error,
+          durationMs: 0,
+          detail: { mcp: true },
         });
+        const progress = noteProgress(call.name, toolResult);
+        if (progress === "nudge") {
+          emit({ kind: "warning", text: "No visible page progress after several calls. Nudged the agent to change approach." });
+          conversation.push({ role: "user", internal: true, content: "No visible page progress after several calls. Change approach: use a different tool or element, scroll_at, or finish." });
+        } else if (progress === "stop") {
+          emit({ kind: "warning", text: "Stopped: several calls in a row produced no visible page progress." });
+          emit({ kind: "finish", summary: "Stopped because the agent was not making visible progress. Try a different instruction or open the page manually." });
+          emit({ kind: "done" });
+          return;
+        }
         continue;
       }
 
@@ -811,6 +898,7 @@ export async function runAgent(deps) {
       executed.push(signature);
       if (ACT_TOOLS.has(call.name)) acted = true;
       let toolResult;
+      const toolStarted = performance.now();
       try {
         ctx.secretConfirmed = secretConfirmed;
         // The page must still show what the gate judged: refuse a ref whose
@@ -823,6 +911,7 @@ export async function runAgent(deps) {
       } catch (e) {
         toolResult = { ok: false, error: String(e.message || e) };
       }
+      const toolDurationMs = Math.round(performance.now() - toolStarted);
       ctx.secretConfirmed = false;
       ctx.expect = undefined;
       ctx.expectSubmits = undefined;
@@ -925,13 +1014,26 @@ export async function runAgent(deps) {
       }
 
       pushToolResult(conversation, call, toolResult);
+      noteRepeat(signature, toolResult);
       noteOutcome(outcomes, stuckPair, signature, toolResult);
       emit({
         kind: "tool_end",
         name: call.name,
         ok: toolResult.ok !== false,
         summary: summarizeResult(call.name, toolResult),
+        durationMs: toolDurationMs,
+        detail: toolDetail(call.name, toolResult),
       });
+      const progress = noteProgress(call.name, toolResult);
+      if (progress === "nudge") {
+        emit({ kind: "warning", text: "No visible page progress after several calls. Nudged the agent to change approach." });
+        conversation.push({ role: "user", internal: true, content: "No visible page progress after several calls. Change approach: use a different tool or element, scroll_at, or finish." });
+      } else if (progress === "stop") {
+        emit({ kind: "warning", text: "Stopped: several calls in a row produced no visible page progress." });
+        emit({ kind: "finish", summary: "Stopped because the agent was not making visible progress. Try a different instruction or open the page manually." });
+        emit({ kind: "done" });
+        return;
+      }
     }
 
     if (pendingImages.length) {
@@ -963,16 +1065,31 @@ const PLAN_SYSTEM = `The user has asked you to do something in their browser. Be
 {"summary": "one sentence describing what you'll do", "steps": ["3 to 7 short high-level steps"], "domains": ["website hostnames you expect to use, e.g. example.com"], "needs_actions": true or false}
 Set needs_actions to false only if you can answer the user directly without acting on any page.`;
 
-async function makePlan(provider, config, conversation, signal, identity = "", where = "") {
+async function makePlan(provider, config, conversation, signal, identity = "", where = "", emit = () => {}) {
+  const messages = compactForModel(conversation);
+  const started = performance.now();
   const res = await callModel(provider, {
     model: config.activeModel,
     // The reply-with-only-JSON instructions stay last.
     system: identity + where.trim() + "\n\n" + PLAN_SYSTEM,
-    messages: compactForModel(conversation),
+    messages,
     tools: [],
     maxTokens: 700,
     temperature: config.settings.temperature,
     signal,
+  });
+  emit({
+    kind: "model_end",
+    phase: "plan",
+    step: 0,
+    model: config.activeModel,
+    provider: provider.name,
+    usage: res.usage || estimateUsage(messages, identity + where + "\n\n" + PLAN_SYSTEM, res),
+    durationMs: Math.round(performance.now() - started),
+    toolCalls: 0,
+    images: countImages(messages),
+    finishReason: res.stopReason || "",
+    contentChars: String(res.content || "").length,
   });
   return parsePlan(res.content);
 }
@@ -1023,6 +1140,83 @@ async function readSelection(tabId, config) {
     return { text: res.text || "", url };
   } catch {
     return none;
+  }
+}
+
+// Fingerprint a tool result without keeping megabytes of DOM/image data.
+function shortHash(value) {
+  const s = String(value || "");
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(36);
+}
+function resultFingerprint(result) {
+  try {
+    const s = JSON.stringify(result);
+    return s.length + ":" + shortHash(s.length > 24000 ? s.slice(0, 12000) + s.slice(-12000) : s);
+  } catch {
+    return String(Math.random());
+  }
+}
+function progressKey(name, result) {
+  if (!result || result.ok === false) return null;
+  if (name === "scroll") return ["scroll", result.scroller || "", result.scrollY || 0, result.moved ? 1 : 0, result.atBottom ? 1 : 0].join("|");
+  if (name === "read_page") return ["read", result.url || "", (result.elements || []).length, shortHash(JSON.stringify((result.elements || []).map((e) => [e.ref, e.name, e.value, e.checked])))].join("|");
+  if (name === "get_page_text") return ["text", result.url || "", shortHash(result.text || "")].join("|");
+  if (name === "navigate" || name === "open_tab" || name === "switch_tab") return ["nav", result.url || ""].join("|");
+  if (["click_element", "type_text", "select_option", "fill_form", "double_click", "press_keys", "upload_file", "click_at", "double_click_at", "drag_path", "scroll_at"].includes(name)) {
+    return ["act", result.url || "", result.clicked || result.typed || result.selected || result.filled || result.dragged || result.pressed || ""].join("|");
+  }
+  return null;
+}
+function estimateTokens(value) {
+  const s = typeof value === "string" ? value : JSON.stringify(value || "");
+  return Math.max(1, Math.ceil(String(s || "").length / 4));
+}
+function estimateUsage(messages, system, result) {
+  const text = (messages || []).map((m) => (typeof m.content === "string" ? m.content : "")).join(" ");
+  const toolsText = JSON.stringify((messages || []).map((m) => m.toolCalls || []));
+  const images = (messages || []).reduce((n, m) => n + (Array.isArray(m.images) ? m.images.length : 0), 0);
+  const prompt = estimateTokens(text) + estimateTokens(toolsText) + estimateTokens(system) + images * 800;
+  const completion = estimateTokens(result?.content || "") + estimateTokens(result?.toolCalls || []);
+  return { prompt, completion, total: prompt + completion, estimated: true };
+}
+function countImages(messages) {
+  return (messages || []).reduce((n, m) => n + (Array.isArray(m.images) ? m.images.length : 0), 0);
+}
+function toolDetail(name, result) {
+  if (!result || typeof result !== "object") return {};
+  switch (name) {
+    case "scroll":
+      return { moved: result.moved, scrollY: result.scrollY, atTop: result.atTop, atBottom: result.atBottom, scroller: result.scroller, note: result.note };
+    case "read_page":
+      return { url: result.url, title: result.title, elements: result.elements || [], elementCount: (result.elements || []).length, paymentStep: !!result.paymentStep, note: result.note };
+    case "get_page_text":
+      return { url: result.url, chars: String(result.text || "").length, text: String(result.text || "").slice(0, 2000) };
+    case "read_network":
+      return { count: (result.requests || []).length, monitoring: !!result.monitoring, source: result.source, note: result.note, requests: result.requests || [] };
+    case "read_console":
+      return { count: (result.messages || []).length, monitoring: !!result.monitoring, note: result.note, messages: result.messages || [] };
+    case "read_image_text":
+      return { lines: result.lines || [], lineCount: (result.lines || []).length, chars: String(result.text || "").length, note: result.note };
+    case "inspect_region":
+      return { region: result.region, note: result.note };
+    case "take_screenshot":
+      return { image: !!result.image, url: result.url, note: result.note };
+    case "run_javascript":
+      return { url: result.url, chars: String(result.result || "").length, result: String(result.result || "").slice(0, 2000) };
+    case "click_at":
+    case "double_click_at":
+      return { x: result.x, y: result.y, button: result.button, click_count: result.click_count };
+    case "drag_path":
+      return { points: result.points, duration_ms: result.duration_ms };
+    case "scroll_at":
+      return { x: result.x, y: result.y, deltaX: result.deltaX, deltaY: result.deltaY };
+    default:
+      return {};
   }
 }
 
@@ -1121,7 +1315,7 @@ function summarizeResult(name, r) {
     case "list_tabs":
       return `${(r.tabs || []).length} tabs`;
     case "scroll":
-      return `scrolled ${r.direction || ""}`;
+      return r.moved === false ? (r.note || "no movement") : `scrolled ${r.direction || ""}${r.atBottom ? " (bottom)" : r.atTop ? " (top)" : ""}`;
     case "wait":
       return `waited ${r.waited_seconds}s`;
     default:

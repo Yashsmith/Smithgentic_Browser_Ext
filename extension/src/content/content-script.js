@@ -807,20 +807,157 @@
     return { ok: true, selected: matched.textContent.trim().slice(0, 60) };
   }
 
-  function scroll(msg) {
-    if (msg.ref) {
-      const el = refMap.get(msg.ref);
-      if (el && isAttached(el)) {
-        el.scrollIntoView({ block: "center", behavior: "auto" });
-        return { ok: true, scrolled_to_ref: msg.ref };
+  // The nearest real scroller for an element: overflow:auto/scroll container,
+  // crossing open shadow roots and same-origin iframe boundaries.
+  function scrollableAncestor(el) {
+    let node = el;
+    for (let depth = 0; node && depth < 40; depth++) {
+      if (node.nodeType === 1 && node.scrollHeight > node.clientHeight + 2) {
+        const style = styleOf(node);
+        if (/(auto|scroll|overlay)/.test(style.overflowY || "") && node !== document.body && node !== document.documentElement) {
+          return node;
+        }
+      }
+      const root = node.getRootNode && node.getRootNode();
+      if (root && root.host) { node = root.host; continue; }
+      if (node.parentElement) { node = node.parentElement; continue; }
+      const view = node.ownerDocument && node.ownerDocument.defaultView;
+      const frame = view && view.frameElement;
+      if (frame) { node = frame; continue; }
+      break;
+    }
+    return null;
+  }
+
+  function viewScrollInfo(view) {
+    const doc = view.document;
+    const root = doc.scrollingElement || doc.documentElement || doc.body;
+    return {
+      view,
+      top: Math.round(view.scrollY || root.scrollTop || 0),
+      height: Math.round(Math.max(root.scrollHeight || 0, doc.body ? doc.body.scrollHeight : 0)),
+      client: Math.round(view.innerHeight || root.clientHeight || 0),
+    };
+  }
+
+  function scrollWindowBy(view, delta, to) {
+    const before = viewScrollInfo(view);
+    if (to === "top") view.scrollTo({ top: 0, behavior: "auto" });
+    else if (to === "bottom") view.scrollTo({ top: before.height, behavior: "auto" });
+    else view.scrollBy({ top: delta, behavior: "auto" });
+    const after = viewScrollInfo(view);
+    return {
+      moved: after.top !== before.top,
+      before: before.top,
+      after: after.top,
+      atTop: after.top <= 1,
+      atBottom: after.top + after.client >= after.height - 3,
+    };
+  }
+
+  function visibleScrollables() {
+    const out = [];
+    for (const scope of deepScopes()) {
+      for (const el of scope.querySelectorAll("*")) {
+        if (el === document.body || el === document.documentElement) continue;
+        if (el.scrollHeight <= el.clientHeight + 2) continue;
+        if (!/(auto|scroll|overlay)/.test(styleOf(el).overflowY || "")) continue;
+        if (!isVisible(el)) continue;
+        const r = el.getBoundingClientRect();
+        out.push({ el, area: Math.max(0, r.width) * Math.max(0, r.height) });
       }
     }
+    return out.sort((a, b) => b.area - a.area).map((x) => x.el);
+  }
+
+  function scrollContainerBy(el, delta, to) {
+    const before = Math.round(el.scrollTop || 0);
+    if (to === "top") el.scrollTop = 0;
+    else if (to === "bottom") el.scrollTop = el.scrollHeight;
+    else el.scrollTop = before + delta;
+    const after = Math.round(el.scrollTop || 0);
+    return {
+      moved: after !== before,
+      before,
+      after,
+      atTop: after <= 1,
+      atBottom: after + el.clientHeight >= el.scrollHeight - 3,
+    };
+  }
+
+  function scroll(msg) {
     const dir = msg.direction || "down";
-    if (dir === "top") window.scrollTo({ top: 0 });
-    else if (dir === "bottom") window.scrollTo({ top: document.body.scrollHeight });
-    else if (dir === "up") window.scrollBy({ top: -Math.round(window.innerHeight * 0.8) });
-    else window.scrollBy({ top: Math.round(window.innerHeight * 0.8) });
-    return { ok: true, direction: dir, scrollY: Math.round(window.scrollY) };
+    const to = dir === "top" || dir === "bottom" ? dir : null;
+    const sign = dir === "up" ? -1 : 1;
+
+    if (msg.ref) {
+      const el = refMap.get(msg.ref);
+      if (!el || !isAttached(el)) return { ok: false, error: `No element with ref ${msg.ref}. Call read_page again.` };
+      const before = viewScrollInfo(el.ownerDocument.defaultView || window);
+      el.scrollIntoView({ block: "center", behavior: "auto" });
+      const after = viewScrollInfo(el.ownerDocument.defaultView || window);
+      return {
+        ok: true,
+        scrolled_to_ref: msg.ref,
+        moved: after.top !== before.top,
+        scrollY: after.top,
+        note: after.top === before.top ? "The element was already visible; nothing scrolled." : undefined,
+      };
+    }
+
+    // Prefer the scroller actually under the viewport centre (nested apps,
+    // iframes, overflow panels), then fall back to the page window.
+    const centerX = Math.round(window.innerWidth / 2);
+    const centerY = Math.round(window.innerHeight / 2);
+    let centerEl = null;
+    try { centerEl = document.elementFromPoint(centerX, centerY); } catch { /* ignore */ }
+    const container = centerEl ? scrollableAncestor(centerEl) : null;
+    if (container) {
+      const r = scrollContainerBy(container, sign * Math.max(120, Math.round(container.clientHeight * 0.8)), to);
+      if (r.moved || r.atTop || r.atBottom) {
+        return {
+          ok: true, direction: dir, moved: r.moved,
+          scroller: (container.id ? "#" + container.id : container.tagName.toLowerCase()),
+          scrollTop: r.after, atTop: r.atTop, atBottom: r.atBottom,
+          note: r.moved ? undefined : r.atTop ? "Already at the top of this panel." : "Already at the bottom of this panel.",
+        };
+      }
+    }
+
+    const view = (centerEl && centerEl.ownerDocument && centerEl.ownerDocument.defaultView) || window;
+    const r = scrollWindowBy(view, sign * Math.max(120, Math.round(view.innerHeight * 0.8)), to);
+    if (r.moved) {
+      return {
+        ok: true, direction: dir, moved: true,
+        scroller: view === window ? "window" : "iframe",
+        scrollY: r.after, atTop: r.atTop, atBottom: r.atBottom,
+      };
+    }
+
+    // The centre and the page window didn't move. Try the largest visible
+    // scrollable panels (nested apps often scroll a sidebar/main column).
+    for (const el of visibleScrollables()) {
+      const moved = scrollContainerBy(el, sign * Math.max(120, Math.round(el.clientHeight * 0.8)), to);
+      if (moved.moved) {
+        return {
+          ok: true, direction: dir, moved: true,
+          scroller: (el.id ? "#" + el.id : el.tagName.toLowerCase()),
+          scrollTop: moved.after, atTop: moved.atTop, atBottom: moved.atBottom,
+        };
+      }
+    }
+
+    // Nested iframe/page didn't move: try the top page as a last resort.
+    const top = scrollWindowBy(window, sign * Math.max(120, Math.round(window.innerHeight * 0.8)), to);
+    return {
+      ok: true, direction: dir, moved: top.moved, scroller: "window",
+      scrollY: top.after, atTop: top.atTop, atBottom: top.atBottom,
+      note: top.moved
+        ? "Scrolled the top page."
+        : view === window
+          ? (top.atBottom ? "Already at the bottom of the page." : "Nothing scrolled; try scroll_at on the area you want to move.")
+          : "Nothing scrolled in the iframe; try scroll_at on the area you want to move.",
+    };
   }
 
   // -------------------------------------------------------------------------

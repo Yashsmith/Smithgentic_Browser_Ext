@@ -65,6 +65,10 @@
         <path d="M4.2 4.8v3.4h3.4" />
         <path d="M12 8.2v4.1l2.7 1.7" />
       </symbol>
+      <symbol id="ic-audit" viewBox="0 0 24 24">
+        <path d="M4 19V5M4 19h16" />
+        <path d="M7.5 16v-6M11.5 16V7M15.5 16v-4M19.5 16V9" />
+      </symbol>
       <symbol id="ic-pencil" viewBox="0 0 24 24">
         <path d="M14.5 5.5l4 4L9 19H5v-4z" />
         <path d="M12.5 7.5l4 4" />
@@ -94,6 +98,10 @@
         <button id="new-chat" class="icon-btn" title="New chat" aria-label="New chat">
           <svg class="ic"><use href="#ic-plus" /></svg>
         </button>
+        <button id="audit-btn" class="icon-btn" title="Audit, tokens & logs" aria-label="Audit, tokens and logs"
+                aria-haspopup="dialog" aria-expanded="false" aria-controls="audit-menu">
+          <svg class="ic"><use href="#ic-audit" /></svg>
+        </button>
         <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">
           <svg class="ic"><use href="#ic-settings" /></svg>
         </button>
@@ -113,6 +121,39 @@
       <div class="hist-body"></div>
       <p class="hist-status" role="status"></p>
     </div>
+    <div id="audit-menu" class="wf-menu audit-menu" role="dialog" aria-label="Audit and logs" tabindex="-1" hidden>
+      <div class="audit-head">
+        <div class="audit-heading">
+          <strong>Audit &amp; analytics</strong>
+          <span id="audit-run-label" class="muted"></span>
+        </div>
+        <div class="audit-actions">
+          <button id="audit-export" class="mini">Export</button>
+          <button id="audit-clear" class="mini danger">Clear</button>
+          <button id="audit-close" class="mini">Close</button>
+        </div>
+      </div>
+      <div id="audit-overall" class="audit-overall"></div>
+      <div class="audit-section-label">Runs</div>
+      <div id="audit-runs" class="audit-runs"></div>
+      <div class="audit-run-head">
+        <strong id="audit-run-title">Latest run</strong>
+        <span id="audit-run-meta" class="muted"></span>
+      </div>
+      <div id="audit-tabs" class="audit-tabs" role="tablist" aria-label="Log filters">
+        <button type="button" class="audit-tab on" data-filter="all">All</button>
+        <button type="button" class="audit-tab" data-filter="tools">Tools</button>
+        <button type="button" class="audit-tab" data-filter="model">Model</button>
+        <button type="button" class="audit-tab" data-filter="vision">Vision</button>
+        <button type="button" class="audit-tab" data-filter="ocr">OCR</button>
+        <button type="button" class="audit-tab" data-filter="network">Network</button>
+        <button type="button" class="audit-tab" data-filter="errors">Errors</button>
+      </div>
+      <input id="audit-search" class="audit-search" type="search" placeholder="Filter logs by tool, model, URL…" autocomplete="off" />
+      <div id="audit-list" class="audit-list"></div>
+      <p id="audit-status" class="hist-status" role="status"></p>
+    </div>
+
     <div id="rec-banner" class="rec-banner" hidden></div>
     <div id="status-bar" class="status-bar" hidden></div>
 
