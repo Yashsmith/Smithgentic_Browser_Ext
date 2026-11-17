@@ -1,10 +1,11 @@
-// Browser-control tools exposed to the model, plus their execution against the
+// Browser tools exposed to the model, plus their execution against the
 // active tab. Tool schemas are provider-agnostic (plain JSON Schema); the
 // provider layer converts them to the right wire format.
 
 import { normalizeTarget } from "./permissions.js";
 import { MSG } from "../common/constants.js";
 import { readConsole, readNetwork } from "./cdp.js";
+import { inspectRegion, readImageText, movePointer, clickAt, dragPath, scrollAt } from "./cv-tools.js";
 
 // The page list is the product's claim about the engine, so it has one owner here.
 export const RESTRICTED_PAGE_HINT =
@@ -63,6 +64,35 @@ export const TOOL_DEFS = [
     },
   },
   {
+    name: "fill_form",
+    description:
+      "Fill several form fields in one call using ref ids from read_page. Values are " +
+      "typed or selected in order; checkboxes/radios accept true/false. Add submit_ref " +
+      "to click the form's submit button only when the user asked you to submit. Secret " +
+      "fields still require the user's explicit value and approval.",
+    parameters: {
+      type: "object",
+      properties: {
+        fields: {
+          type: "array",
+          minItems: 1,
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              ref: { type: "integer", description: "Field ref from read_page." },
+              value: { type: "string", description: "Value to type or option to select." },
+            },
+            required: ["ref", "value"],
+          },
+        },
+        submit_ref: { type: "integer", description: "Optional submit button ref to click after filling." },
+      },
+      required: ["fields"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "select_option",
     description: "Choose an option in a <select> dropdown by its ref id.",
     parameters: {
@@ -112,6 +142,121 @@ export const TOOL_DEFS = [
       "Use when the text map isn't enough to understand or locate something.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     visionOnly: true,
+  },
+  {
+    name: "inspect_region",
+    description:
+      "Capture a high-detail crop of the visible page. Coordinates are normalized 0-1000 " +
+      "to the viewport. Use for small text, canvas apps, cross-origin frames and nested " +
+      "widgets that DOM refs cannot reach. Returns an image; follow with click_at if needed.",
+    parameters: {
+      type: "object",
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1000 },
+        y: { type: "number", minimum: 0, maximum: 1000 },
+        width: { type: "number", exclusiveMinimum: 0, maximum: 1000 },
+        height: { type: "number", exclusiveMinimum: 0, maximum: 1000 },
+        format: { type: "string", enum: ["png", "jpeg", "webp"], description: "Image format (default png)." },
+        quality: { type: "number", minimum: 1, maximum: 100, description: "JPEG/WebP quality." },
+      },
+      required: ["x", "y", "width", "height"],
+      additionalProperties: false,
+    },
+    visionOnly: true,
+  },
+  {
+    name: "read_image_text",
+    description:
+      "Read text painted into images or canvas by running OCR locally in the extension. " +
+      "Returns text lines with normalized 0-1000 coordinates. No screenshot or text is " +
+      "sent to an OCR service. Use when read_page has no useful labels.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "mouse_move",
+    description: "Move the real browser pointer to normalized 0-1000 viewport coordinates.",
+    parameters: {
+      type: "object",
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1000 },
+        y: { type: "number", minimum: 0, maximum: 1000 },
+      },
+      required: ["x", "y"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "click_at",
+    description:
+      "Click the real browser pointer at normalized 0-1000 viewport coordinates. Use for " +
+      "canvas, cross-origin frames and visual-only widgets where read_page refs don't exist.",
+    parameters: {
+      type: "object",
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1000 },
+        y: { type: "number", minimum: 0, maximum: 1000 },
+        button: { type: "string", enum: ["left", "right", "middle"], description: "Mouse button." },
+      },
+      required: ["x", "y"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "double_click_at",
+    description: "Double-click the real browser pointer at normalized 0-1000 viewport coordinates.",
+    parameters: {
+      type: "object",
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1000 },
+        y: { type: "number", minimum: 0, maximum: 1000 },
+      },
+      required: ["x", "y"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "drag_path",
+    description:
+      "Drag the real browser pointer along 2-50 normalized 0-1000 points. Use for canvas, " +
+      "sliders, maps and visual-only drag targets. Prefer drag_element for normal DOM refs.",
+    parameters: {
+      type: "object",
+      properties: {
+        path: {
+          type: "array",
+          minItems: 2,
+          maxItems: 50,
+          items: {
+            type: "object",
+            properties: {
+              x: { type: "number", minimum: 0, maximum: 1000 },
+              y: { type: "number", minimum: 0, maximum: 1000 },
+            },
+            required: ["x", "y"],
+          },
+        },
+        durationMs: { type: "number", description: "Movement time in ms (50-5000, default 400)." },
+        holdMs: { type: "number", description: "Hold before moving in ms (0-2000, default 60)." },
+      },
+      required: ["path"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "scroll_at",
+    description:
+      "Scroll with a real mouse wheel at normalized 0-1000 viewport coordinates. Use for " +
+      "canvas maps, nested scrollers and cross-origin frames.",
+    parameters: {
+      type: "object",
+      properties: {
+        x: { type: "number", minimum: 0, maximum: 1000 },
+        y: { type: "number", minimum: 0, maximum: 1000 },
+        deltaX: { type: "number", description: "Horizontal wheel delta." },
+        deltaY: { type: "number", description: "Vertical wheel delta (positive scrolls down)." },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "hover_element",
@@ -328,6 +473,28 @@ export async function executeTool(name, args, ctx) {
         secretOk: typeof ctx.secretOk === "function" && ctx.secretOk(args.text) === true,
         secretConfirmed: ctx.secretConfirmed === true,
       });
+    case "fill_form": {
+      const fields = Array.isArray(args.fields) ? args.fields : [];
+      if (!fields.length) return { ok: false, error: "fields must be a non-empty array of {ref, value}." };
+      const tabId = await ctx.getTabId();
+      const filled = [];
+      for (const field of fields) {
+        const res = await csSend(tabId, {
+          type: MSG.CS_ACT, action: "fill",
+          ref: field.ref, value: field.value,
+          secretOk: typeof ctx.secretOk === "function" && ctx.secretOk(String(field.value)) === true,
+          secretConfirmed: ctx.secretConfirmed === true,
+        });
+        filled.push({ ref: field.ref, ok: res?.ok !== false, error: res?.ok === false ? res.error : undefined });
+        if (res?.ok === false) return { ...res, filled };
+      }
+      if (Number.isInteger(args.submit_ref)) {
+        const res = await csSend(tabId, { type: MSG.CS_ACT, action: "click", ref: args.submit_ref });
+        filled.push({ ref: args.submit_ref, ok: res?.ok !== false, submitted: res?.ok !== false, error: res?.ok === false ? res.error : undefined });
+        if (res?.ok === false) return { ...res, filled };
+      }
+      return { ok: true, filled };
+    }
     case "select_option":
       return await csSend(await ctx.getTabId(), {
         type: MSG.CS_ACT, expect: ctx.expect, expectSubmits: ctx.expectSubmits, expectPaymentStep: ctx.expectPaymentStep, guard: ctx.guard,
@@ -357,6 +524,20 @@ export async function executeTool(name, args, ctx) {
       });
     case "take_screenshot":
       return await screenshot(ctx);
+    case "inspect_region":
+      return await inspectRegion(await ctx.getTabId(), args);
+    case "read_image_text":
+      return await readImageText(await ctx.getTabId(), args);
+    case "mouse_move":
+      return await movePointer(await ctx.getTabId(), args);
+    case "click_at":
+      return await clickAt(await ctx.getTabId(), args);
+    case "double_click_at":
+      return await clickAt(await ctx.getTabId(), args, 2);
+    case "drag_path":
+      return await dragPath(await ctx.getTabId(), args);
+    case "scroll_at":
+      return await scrollAt(await ctx.getTabId(), args);
     case "run_javascript":
       return await runJavascript(ctx, args.code);
     case "read_console":

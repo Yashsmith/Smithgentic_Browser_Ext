@@ -19,6 +19,7 @@ export const MUTATING_TOOLS = new Set([
   "click_element",
   "type_text",
   "select_option",
+  "fill_form",
   "navigate",
   "open_tab",
   "scroll",
@@ -29,6 +30,10 @@ export const MUTATING_TOOLS = new Set([
   "press_keys",
   "upload_file",
   "run_javascript",
+  "click_at",
+  "double_click_at",
+  "drag_path",
+  "scroll_at",
 ]);
 
 // Tools that read page content without modifying it. In the default "all sites"
@@ -39,6 +44,8 @@ export const PAGE_READ_TOOLS = new Set([
   "read_page",
   "get_page_text",
   "take_screenshot",
+  "inspect_region",
+  "read_image_text",
   "read_console",
   "read_network",
 ]);

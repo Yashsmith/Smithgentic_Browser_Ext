@@ -67,6 +67,9 @@ const LOOP_EXEMPT = new Set([
   "scroll",
   "wait",
   "take_screenshot",
+  "inspect_region",
+  "read_image_text",
+  "mouse_move",
   "list_tabs",
   "read_console",
   "read_network",
@@ -88,12 +91,13 @@ function identityNotes(config, provider) {
 // Tools that change something on the page: one of these running makes a
 // text-only reply "mid-task" (navigation, hovering and reads don't).
 const ACT_TOOLS = new Set([
-  "click_element", "type_text", "select_option", "double_click", "right_click",
+  "click_element", "type_text", "select_option", "fill_form", "double_click", "right_click",
   "drag_element", "press_keys", "upload_file", "run_javascript",
+  "click_at", "double_click_at", "drag_path",
 ]);
 
 // Tools that can send text out of the page (form fields, scripts).
-const SEND_TOOLS = new Set(["type_text", "press_keys", "upload_file", "run_javascript"]);
+const SEND_TOOLS = new Set(["type_text", "fill_form", "press_keys", "upload_file", "run_javascript"]);
 
 // The URL a tab shows or is loading ("" when the tab is gone).
 async function tabUrl(tabId) {
@@ -644,6 +648,13 @@ export async function runAgent(deps) {
             actionWhy = "On the payment step: this may place the order";
           }
         }
+        if (!gateReads && call.name === "fill_form" && Number.isInteger(call.args?.submit_ref)) {
+          const label = lastElements.get(call.args.submit_ref) || "";
+          if (isSensitiveActionText(label) || lastFormPays.has(call.args.submit_ref) || lastPaymentStep) {
+            forceSensitive = true;
+            actionWhy = lastPaymentStep ? "Submits a form on the payment step" : "Submits a form with a risky button";
+          }
+        }
         if (!gateReads && call.name === "type_text" && call.args?.submit && isSensitiveActionText(lastFormSubmit.get(call.args?.ref))) {
           forceSensitive = true;
           actionWhy = `Submits a form with the button \u201c${String(lastFormSubmit.get(call.args.ref)).slice(0, 60)}\u201d`;
@@ -677,6 +688,13 @@ export async function runAgent(deps) {
         if (!gateReads && call.name === "type_text" && lastSecret.has(call.args?.ref) && ctx.secretOk(call.args?.text)) {
           forceSensitive = true;
           secretWhy = "Typing into a password, card or code field";
+        }
+        if (!gateReads && call.name === "fill_form" && Array.isArray(call.args?.fields)) {
+          const secret = call.args.fields.find((f) => lastSecret.has(f?.ref) && ctx.secretOk(String(f?.value ?? "")));
+          if (secret) {
+            forceSensitive = true;
+            secretWhy = "Filling a password, card or code field";
+          }
         }
         if (forceSensitive && verdict.decision !== "block") {
           verdict = { decision: "prompt", sensitive: true, ...(secretWhy || actionWhy ? { why: [secretWhy, actionWhy].filter(Boolean).join("; ") } : {}) };
@@ -786,7 +804,7 @@ export async function runAgent(deps) {
       // (C) Show the on-page activity indicator on the tab we're about to touch
       // (hidden momentarily for screenshots so it isn't captured).
       const overlayLabel = "Smithgentic Browser: " + call.name.replace(/_/g, " ");
-      const hideForShot = call.name === "take_screenshot";
+      const hideForShot = call.name === "take_screenshot" || call.name === "inspect_region" || call.name === "read_image_text";
       touchedTabs.add(focusedTabId);
       await setOverlay(focusedTabId, hideForShot ? "hide" : "show", overlayLabel);
 
@@ -837,7 +855,7 @@ export async function runAgent(deps) {
       // model treats page instructions as data, not commands.
       // Any read of the start tab counts, even one that failed: a page Chrome
       // keeps every extension out of (the Web Store) can't be read at all.
-      const readTool = /^(read_page|get_page_text|take_screenshot)$/.test(call.name);
+      const readTool = /^(read_page|get_page_text|take_screenshot|inspect_region|read_image_text)$/.test(call.name);
       if ((readTool && focusedTabId === initialTabId) || (toolResult && toolResult.ok !== false && (FOCUS_TOOLS.has(call.name) || (readTool && siteKey(toolResult.url) === startKey)))) {
         startUnread = false;
         startBounceStep = -1; // looked (or moved to a tab the agent chose): stop sending calls back
@@ -1060,6 +1078,8 @@ function summarizeResult(name, r) {
       return `typed "${(r.typed || "").slice(0, 40)}"${r.submitted ? " and submitted" : ""}`;
     case "select_option":
       return `selected ${r.selected || ""}`;
+    case "fill_form":
+      return `filled ${(r.filled || []).length} field(s)`;
     case "hover_element":
       return `hovered ${r.hovered || ""}`;
     case "double_click":
@@ -1072,6 +1092,20 @@ function summarizeResult(name, r) {
       return `pressed ${r.pressed || "keys"}`;
     case "take_screenshot":
       return r.note || "captured screenshot";
+    case "inspect_region":
+      return r.note || "captured high-detail crop";
+    case "read_image_text":
+      return `read ${(r.lines || []).length} OCR line(s)`;
+    case "click_at":
+      return `clicked (${r.x || "?"}, ${r.y || "?"})`;
+    case "double_click_at":
+      return `double-clicked (${r.x || "?"}, ${r.y || "?"})`;
+    case "mouse_move":
+      return `moved pointer to (${r.x || "?"}, ${r.y || "?"})`;
+    case "drag_path":
+      return `dragged ${r.points || 0} points`;
+    case "scroll_at":
+      return "scrolled at point";
     case "run_javascript":
       return `ran JS → ${String(r.result || "").slice(0, 60)}`;
     case "read_console":

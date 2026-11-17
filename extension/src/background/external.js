@@ -35,7 +35,7 @@ const NOT_OFFERED = new Set(["finish", "ask_user", "run_javascript", "read_conso
 // Need no page and touch nothing outside the agent's own tabs.
 const UNGATED = new Set(["list_tabs", "wait"]);
 // Reading or moving around: covered by "Allow reading this site".
-const LOOK_TOOLS = new Set(["read_page", "get_page_text", "take_screenshot", "navigate", "open_tab", "switch_tab", "scroll", "hover_element"]);
+const LOOK_TOOLS = new Set(["read_page", "get_page_text", "take_screenshot", "inspect_region", "read_image_text", "navigate", "open_tab", "switch_tab", "scroll", "hover_element"]);
 const REF_TOOLS = new Set(["click_element", "type_text", "select_option", "hover_element", "double_click", "right_click", "drag_element", "upload_file"]);
 
 const bridgeGroups = new Set(); // tab groups local agents own
@@ -54,6 +54,9 @@ export function clientLabel(name) {
 
 // Why a call asks every time, even on a site allowed for actions; "" if it needn't.
 export function riskReason(name, args, label, submits) {
+  if (name === "click_at" || name === "double_click_at") return "This clicks by coordinates.";
+  if (name === "drag_path") return "This drags by coordinates.";
+  if (name === "scroll_at") return "This scrolls by coordinates.";
   if (name === "upload_file") return "This uploads a file.";
   if (name === "press_keys") return "This presses keys, which can submit or trigger shortcuts.";
   if (name === "drag_element") return "This drags an element.";

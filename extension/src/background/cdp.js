@@ -176,7 +176,7 @@ function debuggerDetach(tabId) {
   });
 }
 
-function sendCommand(tabId, method, params) {
+export function sendCommand(tabId, method, params) {
   return new Promise((resolve, reject) => {
     chrome.debugger.sendCommand({ tabId }, method, params || {}, (result) => {
       const err = chrome.runtime.lastError;

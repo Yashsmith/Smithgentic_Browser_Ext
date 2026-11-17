@@ -11,6 +11,69 @@
   window.__smithgentic_cs_loaded = true;
 
   const MAX_ELEMENTS = 200;
+
+  // Deep DOM: include open shadow roots and same-origin iframe documents.
+  // Cross-origin iframes are intentionally not traversed (browser security);
+  // they remain visually controllable through screenshots and coordinates.
+  function deepScopes(root = document, out = [], guard = 0) {
+    if (!root || guard > 20) return out;
+    out.push(root);
+    for (const el of root.querySelectorAll("*")) {
+      if (el.hasAttribute && el.hasAttribute("data-smithgentic-pointer")) continue;
+      if (el.shadowRoot) deepScopes(el.shadowRoot, out, guard + 1);
+      if (el.tagName === "IFRAME") {
+        try {
+          const doc = el.contentDocument;
+          if (doc) deepScopes(doc, out, guard + 1);
+        } catch {
+          /* cross-origin */
+        }
+      }
+    }
+    return out;
+  }
+  function deepQueryAll(selector, root = document) {
+    const out = [];
+    for (const scope of deepScopes(root)) {
+      try { out.push(...scope.querySelectorAll(selector)); } catch { /* invalid selector */ }
+    }
+    return out;
+  }
+  function deepQueryOne(selector, root = document) {
+    for (const scope of deepScopes(root)) {
+      const el = scope.querySelector(selector);
+      if (el) return el;
+    }
+    return null;
+  }
+  function deepById(el, id) {
+    const root = el && el.getRootNode ? el.getRootNode() : null;
+    return (root && root.getElementById && root.getElementById(id)) || (el && el.ownerDocument && el.ownerDocument.getElementById(id)) || null;
+  }
+  function styleOf(el) {
+    return (el.ownerDocument && el.ownerDocument.defaultView || window).getComputedStyle(el);
+  }
+  function isAttached(el) {
+    if (!el || !el.isConnected) return false;
+    const doc = el.ownerDocument;
+    if (!doc || doc === document) return true;
+    const frame = doc.defaultView && doc.defaultView.frameElement;
+    return !!frame && isAttached(frame);
+  }
+  function deepText(root = document, guard = 0) {
+    if (!root || guard > 20) return "";
+    let text = root.body && root.body.innerText || root.host && root.host.innerText || root.textContent || "";
+    for (const el of root.querySelectorAll ? root.querySelectorAll("*") : []) {
+      if (el.tagName === "IFRAME") {
+        try {
+          const doc = el.contentDocument;
+          if (doc) text += "\n" + deepText(doc, guard + 1);
+        } catch { /* cross-origin */ }
+      }
+      if (el.shadowRoot) text += "\n" + deepText(el.shadowRoot, guard + 1);
+    }
+    return text;
+  }
   const MAX_TEXT = 8000;
 
   // ref id -> element. Rebuilt on every read_page.
@@ -64,7 +127,7 @@
   // (left out of form.elements) and form= ones outside it too. Not form.elements,
   // which a control named "elements" shadows.
   function formButtons(form) {
-    return Array.from(document.querySelectorAll("button,input")).filter(
+    return Array.from(deepQueryAll("button,input")).filter(
       (c) => c.form === form && (c.tagName === "BUTTON" || /^(submit|image|button)$/i.test(c.type)),
     );
   }
@@ -74,7 +137,7 @@
   function formButtonsCached(form) {
     if (!formButtonMap) {
       formButtonMap = new Map();
-      for (const c of document.querySelectorAll("button,input")) {
+      for (const c of deepQueryAll("button,input")) {
         if (!c.form || !(c.tagName === "BUTTON" || /^(submit|image|button)$/i.test(c.type))) continue;
         if (!formButtonMap.has(c.form)) formButtonMap.set(c.form, []);
         formButtonMap.get(c.form).push(c);
@@ -128,7 +191,7 @@
       "label[for]",
     ].join(",");
 
-    const nodes = document.querySelectorAll(selector);
+    const nodes = deepQueryAll(selector);
     if (query) return findResult(query, nodes);
     for (const el of nodes) {
       if (elements.length >= MAX_ELEMENTS) break;
@@ -246,7 +309,7 @@
   function labelFor(el) {
     if (!labelOf) {
       labelOf = new Map();
-      for (const l of document.querySelectorAll("label")) {
+      for (const l of deepQueryAll("label")) {
         const c = l.control;
         if (c && !labelOf.has(c)) labelOf.set(c, l);
       }
@@ -257,7 +320,7 @@
   function labelledByText(el) {
     const ids = el.getAttribute("aria-labelledby");
     if (!ids) return "";
-    return ids.split(/\s+/).map((id) => document.getElementById(id)).filter(Boolean).map((n) => ownText(n)).join(" ");
+    return ids.split(/\s+/).map((id) => deepById(el, id)).filter(Boolean).map((n) => ownText(n)).join(" ");
   }
   function isCardField(el) {
     if (!el || el.localName !== "input" || /^(hidden|search|submit|button|reset|image|file|checkbox|radio)$/i.test(el.type)) return false;
@@ -277,7 +340,7 @@
     if (!payingForms) {
       payingForms = new Set();
       try {
-        for (const c of document.querySelectorAll("input")) if (c.form && !payingForms.has(c.form) && isCardField(c)) payingForms.add(c.form);
+        for (const c of deepQueryAll("input")) if (c.form && !payingForms.has(c.form) && isCardField(c)) payingForms.add(c.form);
       } catch {
         /* ignore */
       }
@@ -296,9 +359,9 @@
   function paymentStepOnPage() {
     try {
       // The whole page, not pageText(): a saved card can sit outside <main> or past its cut.
-      if (document.body && SAVED_PM_RE.test(document.body.innerText || "")) return true;
-      for (const c of document.querySelectorAll("input")) if (isCardField(c) && isVisible(c)) return true;
-      for (const f of document.querySelectorAll("iframe")) {
+      if (document.body && SAVED_PM_RE.test(deepText() || "")) return true;
+      for (const c of deepQueryAll("input")) if (isCardField(c) && isVisible(c)) return true;
+      for (const f of deepQueryAll("iframe")) {
         // The src without its query or fragment: Stripe puts the shop's own URL
         // there (referrer=...), and a shop called "...express..." is no button.
         const src = String(f.getAttribute("src") || "").split(/[?#]/)[0];
@@ -341,13 +404,13 @@
     if (labelledby) {
       const parts = labelledby
         .split(/\s+/)
-        .map((id) => document.getElementById(id))
+        .map((id) => deepById(el, id))
         .filter(Boolean)
         .map((n) => ownText(n).trim());
       if (parts.length) return parts.join(" ");
     }
     if (el.id) {
-      const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+      const lbl = (el.getRootNode && el.getRootNode().querySelector ? el.getRootNode().querySelector(`label[for="${CSS.escape(el.id)}"]`) : null) || deepQueryOne(`label[for="${CSS.escape(el.id)}"]`);
       if (lbl) return ownText(lbl).trim();
     }
     const closestLabel = el.closest("label");
@@ -379,9 +442,9 @@
   }
 
   function pageSummary() {
-    const meta = document.querySelector('meta[name="description"]');
+    const meta = deepQueryOne('meta[name="description"]');
     const desc = meta ? meta.getAttribute("content") : "";
-    const h1 = document.querySelector("h1");
+    const h1 = deepQueryOne("h1");
     return {
       headline: h1 ? h1.textContent.trim().slice(0, 200) : "",
       description: (desc || "").trim().slice(0, 300),
@@ -391,12 +454,12 @@
 
   function pageText() {
     const root =
-      document.querySelector("main") ||
-      document.querySelector("article") ||
-      document.querySelector("[role=main]") ||
+      deepQueryOne("main") ||
+      deepQueryOne("article") ||
+      deepQueryOne("[role=main]") ||
       document.body;
     if (!root) return "";
-    const text = (root.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
+    const text = deepText(root).replace(/\n{3,}/g, "\n\n").trim();
     return text.slice(0, MAX_TEXT);
   }
 
@@ -413,7 +476,7 @@
         error: `No element with ref ${msg.ref}. Call read_page again — the page may have changed.`,
       };
     }
-    if (!document.contains(el)) {
+    if (!isAttached(el)) {
       return { ok: false, error: `Element ${msg.ref} is no longer on the page. Re-read the page.` };
     }
     // The caller approved an action on the element it saw: refuse if this ref
@@ -443,6 +506,11 @@
           return { ok: false, error: "This is a password, card or one-time-code field and the user must approve the fill. Call read_page again, then retry." };
         }
         return type(el, msg.text, msg.submit);
+      case "fill":
+        if (isSecretField(el) && msg.secretOk !== true) {
+          return { ok: false, error: "This is a password, card or one-time-code field. You may only type a value the user gave you in this chat. Ask the user to fill it in themselves." };
+        }
+        return fill(el, msg.value);
       case "select":
         return select(el, msg.value);
       case "hover":
@@ -494,7 +562,7 @@
   }
 
   function drag(source, target) {
-    if (!target || !document.contains(target)) {
+    if (!target || !isAttached(target)) {
       return { ok: false, error: "Drop target ref not found. Re-read the page." };
     }
     const rect = (n) => n.getBoundingClientRect();
@@ -540,7 +608,7 @@
 
   function pressKeys(el, keys) {
     if (!Array.isArray(keys) || !keys.length) return { ok: false, error: "No keys provided." };
-    const target = el && document.contains(el) ? el : document.activeElement || document.body;
+    const target = el && isAttached(el) ? el : el && el.ownerDocument && el.ownerDocument.activeElement || document.activeElement || document.body;
     const mods = keys.slice(0, -1).map((k) => k.toLowerCase());
     const key = keys[keys.length - 1];
     const init = {
@@ -626,7 +694,7 @@
     const auto = (el.getAttribute("autocomplete") || "").toLowerCase().split(/\s+/);
     let masked = false;
     try {
-      const ts = getComputedStyle(el).getPropertyValue("-webkit-text-security");
+      const ts = styleOf(el).getPropertyValue("-webkit-text-security");
       masked = !!ts && ts !== "none";
     } catch {
       /* ignore */
@@ -702,6 +770,20 @@
     return out;
   }
 
+  function fill(el, value) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "select") return select(el, value);
+    if (tag === "input" && (el.type === "checkbox" || el.type === "radio")) {
+      const want = typeof value === "boolean"
+        ? value
+        : /^(true|yes|1|on|checked|select|selected)$/i.test(String(value ?? ""));
+      if (el.checked !== want) click(el);
+      return { ok: true, filled: want, checked: el.checked };
+    }
+    const out = type(el, String(value ?? ""), false);
+    return { ...out, filled: isSecretField(el) ? "(hidden)" : String(value ?? "").slice(0, 80) };
+  }
+
   function select(el, value) {
     if (el.tagName.toLowerCase() !== "select") {
       return { ok: false, error: `Element ${el.tagName} is not a <select>.` };
@@ -728,7 +810,7 @@
   function scroll(msg) {
     if (msg.ref) {
       const el = refMap.get(msg.ref);
-      if (el && document.contains(el)) {
+      if (el && isAttached(el)) {
         el.scrollIntoView({ block: "center", behavior: "auto" });
         return { ok: true, scrolled_to_ref: msg.ref };
       }
@@ -917,7 +999,7 @@
 
   function isVisible(el) {
     if (el.disabled) return true; // still worth listing so the model knows it's there
-    const style = window.getComputedStyle(el);
+    const style = styleOf(el);
     if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
     const rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) return false;

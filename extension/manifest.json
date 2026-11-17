@@ -51,7 +51,8 @@
     "contextMenus",
     "notifications",
     "alarms",
-    "debugger"
+    "debugger",
+    "offscreen"
   ],
   "optional_permissions": [
     "nativeMessaging"
@@ -67,5 +68,8 @@
       },
       "description": "Open the Smithgentic Browser side panel"
     }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
   }
 }

@@ -1,0 +1,44 @@
+{
+  "name": "smithgentic-browser",
+  "version": "0.6.2",
+  "description": "Smithgentic Browser: Chrome/Edge AI agent with side panel, providers, DOM, vision and CV browser control",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "smithgentic-browser-mcp": "./extension/native/smithgentic-bridge.mjs",
+    "smithgentic-browser-cdp": "./dist/cli/index.js",
+    "smithgentic-browser-cdp-mcp": "./dist/mcp/server.js",
+    "smithgentic-browser-http": "./dist/mcp/http-server.js"
+  },
+  "scripts": {
+    "build": "tsc && npm run build:extension",
+    "build:extension": "node scripts/build-ocr.mjs",
+    "dev": "tsx src/cli/index.ts",
+    "cli": "tsx src/cli/index.ts",
+    "doctor": "tsx src/cli/index.ts doctor",
+    "mcp": "node extension/native/smithgentic-bridge.mjs --mcp",
+    "start": "npm run mcp",
+    "mcp:cdp": "tsx src/mcp/server.ts",
+    "mcp:http": "tsx src/mcp/http-server.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "pngjs": "^7.0.0",
+    "ws": "^8.21.3",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@tesseract.js-data/eng": "1.0.0",
+    "@types/node": "^22.13.4",
+    "@types/pngjs": "^6.0.5",
+    "@types/ws": "^8.5.14",
+    "tesseract.js": "7.0.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}
