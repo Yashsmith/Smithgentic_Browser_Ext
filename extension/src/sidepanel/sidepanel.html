@@ -69,6 +69,13 @@
         <path d="M4 19V5M4 19h16" />
         <path d="M7.5 16v-6M11.5 16V7M15.5 16v-4M19.5 16V9" />
       </symbol>
+      <symbol id="ic-sun" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="4" />
+        <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" />
+      </symbol>
+      <symbol id="ic-moon" viewBox="0 0 24 24">
+        <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" />
+      </symbol>
       <symbol id="ic-pencil" viewBox="0 0 24 24">
         <path d="M14.5 5.5l4 4L9 19H5v-4z" />
         <path d="M12.5 7.5l4 4" />
@@ -98,10 +105,6 @@
         <button id="new-chat" class="icon-btn" title="New chat" aria-label="New chat">
           <svg class="ic"><use href="#ic-plus" /></svg>
         </button>
-        <button id="audit-btn" class="icon-btn" title="Audit, tokens & logs" aria-label="Audit, tokens and logs"
-                aria-haspopup="dialog" aria-expanded="false" aria-controls="audit-menu">
-          <svg class="ic"><use href="#ic-audit" /></svg>
-        </button>
         <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">
           <svg class="ic"><use href="#ic-settings" /></svg>
         </button>
@@ -112,6 +115,18 @@
         <button type="button" id="model-chip" class="chip model-chip"><span class="mc-model"></span><span class="mc-sep" aria-hidden="true">·</span><span class="mc-provider"></span></button>
       </div>
     </header>
+
+    <div class="audit-strip">
+      <button id="audit-strip-btn" class="audit-strip-btn" aria-haspopup="dialog" aria-expanded="false" aria-controls="audit-menu" title="Open audit, tokens and logs">
+        <span class="audit-strip-icon"><svg class="ic"><use href="#ic-audit" /></svg></span>
+        <span class="audit-strip-label">Audit &amp; logs</span>
+        <span id="audit-strip-meta" class="audit-strip-meta">Open logs</span>
+        <span class="audit-strip-chevron" aria-hidden="true">›</span>
+      </button>
+      <button id="theme-btn" class="icon-btn theme-btn" title="Toggle light/dark theme" aria-label="Toggle light/dark theme">
+        <svg class="ic"><use id="theme-icon" href="#ic-moon" /></svg>
+      </button>
+    </div>
 
     <div id="wf-menu" class="wf-menu" hidden></div>
     <!-- A non-modal dialog, not a menu: rows hold several buttons and an inline
@@ -133,8 +148,12 @@
           <button id="audit-close" class="mini">Close</button>
         </div>
       </div>
-      <div id="audit-overall" class="audit-overall"></div>
-      <div class="audit-section-label">Runs</div>
+      <div id="audit-view-tabs" class="audit-view-tabs" role="tablist" aria-label="Audit view">
+        <button type="button" class="audit-view-tab on" data-view="logs">Logs</button>
+        <button type="button" class="audit-view-tab" data-view="overview">Overview</button>
+      </div>
+      <div id="audit-overall" class="audit-overall" hidden></div>
+      <div id="audit-runs-label" class="audit-section-label">Runs</div>
       <div id="audit-runs" class="audit-runs"></div>
       <div class="audit-run-head">
         <strong id="audit-run-title">Latest run</strong>

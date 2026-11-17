@@ -59,9 +59,14 @@ const els = {
   jumpLatest: document.getElementById("jump-latest"),
   modelLine: document.getElementById("model-line"),
   modelChip: document.getElementById("model-chip"),
-  auditBtn: document.getElementById("audit-btn"),
+  auditBtn: document.getElementById("audit-strip-btn"),
+  auditStripMeta: document.getElementById("audit-strip-meta"),
+  themeBtn: document.getElementById("theme-btn"),
+  themeIcon: document.getElementById("theme-icon"),
   auditMenu: document.getElementById("audit-menu"),
   auditOverall: document.getElementById("audit-overall"),
+  auditViewTabs: document.getElementById("audit-view-tabs"),
+  auditRunsLabel: document.getElementById("audit-runs-label"),
   auditRuns: document.getElementById("audit-runs"),
   auditList: document.getElementById("audit-list"),
   auditSearch: document.getElementById("audit-search"),
@@ -102,10 +107,15 @@ let auditSummary = null;
 let auditRun = null;
 let auditSelectedRunId = null;
 let auditFilter = "all";
+let auditView = "logs";
 let auditSearchText = "";
 let auditRefreshTimer = 0;
 let auditRefreshSeq = 0;
 let liveTokens = 0;
+const liveStats = { tokens: 0, tools: 0, vision: 0, ocr: 0, network: 0, console: 0, js: 0 };
+
+const THEME_KEY = "smithgentic:theme";
+
 
 // The copy control's feedback, keyed by state. Label and accessible name come from
 // the state, so a streaming message carries only the state across a re-render and
@@ -139,6 +149,7 @@ async function init() {
   refreshConfigured();
   refreshContextHint();
   restorePendingWorkflow();
+  void refreshAuditStrip();
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.type === MSG.AGENT_EVENT) handleEvent(msg);
@@ -254,6 +265,8 @@ async function init() {
   els.input.addEventListener("blur", () => setTimeout(hideSlashMenu, 150));
   els.stop.addEventListener("click", () => send({ type: MSG.STOP_TASK }));
   els.newChat.addEventListener("click", newChat);
+  initTheme();
+  els.themeBtn.addEventListener("click", toggleTheme);
   els.auditBtn.addEventListener("click", toggleAudit);
   els.auditMenu.addEventListener("keydown", (e) => {
     if (e.key === "Escape") closeAudit();
@@ -264,6 +277,12 @@ async function init() {
   els.auditSearch.addEventListener("input", () => {
     auditSearchText = els.auditSearch.value.trim().toLowerCase();
     renderAuditTimeline();
+  });
+  els.auditViewTabs.addEventListener("click", (e) => {
+    const tab = e.target.closest(".audit-view-tab");
+    if (!tab) return;
+    auditView = tab.dataset.view === "overview" ? "overview" : "logs";
+    applyAuditView();
   });
   els.auditTabs.addEventListener("click", (e) => {
     const tab = e.target.closest(".audit-tab");
@@ -646,6 +665,8 @@ function handleEvent(ev) {
       break;
     case "model_end":
       liveTokens += Number(ev.usage?.total || 0);
+      liveStats.tokens = liveTokens;
+      updateAuditStrip();
       if (running) setStatus(`Working… · ${fmtNum(liveTokens)} tokens`);
       break;
     case "tool_start":
@@ -653,6 +674,13 @@ function handleEvent(ev) {
       break;
     case "tool_end":
       addToolEnd(ev.name, ev.ok, ev.summary);
+      liveStats.tools += 1;
+      if (ev.name === "take_screenshot" || ev.name === "inspect_region") liveStats.vision += 1;
+      else if (ev.name === "read_image_text") liveStats.ocr += 1;
+      else if (ev.name === "read_network") liveStats.network += 1;
+      else if (ev.name === "read_console") liveStats.console += 1;
+      else if (ev.name === "run_javascript") liveStats.js += 1;
+      updateAuditStrip();
       break;
     case "planning":
       setStatus("Planning…");
@@ -688,6 +716,7 @@ function handleEvent(ev) {
       break;
     case "idle":
       setRunning(false);
+      void refreshAuditStrip();
       // The run is over: a card still waiting for an answer can't be answered.
       els.messages.querySelectorAll(".perm-card[data-run] .perm-buttons").forEach((b) => {
         b.outerHTML = `<p class="muted-note">No longer needed — the task ended.</p>`;
@@ -698,7 +727,11 @@ function handleEvent(ev) {
 
 function setRunning(v) {
   const changed = running !== v;
-  if (v && !running) liveTokens = 0;
+  if (v && !running) {
+    liveTokens = 0;
+    for (const k of Object.keys(liveStats)) liveStats[k] = 0;
+    updateAuditStrip();
+  }
   running = v;
   if (changed) refreshHistoryMenu(true);
   els.send.disabled = v;
@@ -1838,6 +1871,57 @@ function ic(name) {
 // -------------------------------------------------------------------------
 // Audit & analytics
 // -------------------------------------------------------------------------
+function formatThemeIcon(theme) {
+  els.themeIcon.setAttribute("href", theme === "dark" ? "#ic-sun" : "#ic-moon");
+  els.themeBtn.title = theme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+  els.themeBtn.setAttribute("aria-label", els.themeBtn.title);
+}
+function applyTheme(theme, persist = true) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* storage unavailable */ }
+  }
+  formatThemeIcon(next);
+}
+function initTheme() {
+  let saved = null;
+  try { saved = localStorage.getItem(THEME_KEY); } catch { /* storage unavailable */ }
+  const theme = saved === "light" || saved === "dark"
+    ? saved
+    : (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  applyTheme(theme, false);
+}
+function toggleTheme() {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+}
+function updateAuditStrip() {
+  if (!els.auditStripMeta) return;
+  const s = running ? liveStats : (auditSummary?.overall || liveStats);
+  const tokens = running ? liveStats.tokens : Number(s.totalTokens ?? liveStats.tokens);
+  const tools = running ? liveStats.tools : Number(s.toolCalls ?? liveStats.tools);
+  const vision = running ? liveStats.vision : Number(s.visionCalls ?? liveStats.vision);
+  const ocr = running ? liveStats.ocr : Number(s.ocrCalls ?? liveStats.ocr);
+  els.auditStripMeta.textContent = `${fmtNum(tokens)} tok · ${fmtNum(tools)} tools\n${fmtNum(vision)} vis · ${fmtNum(ocr)} OCR`;
+  els.auditStripMeta.title = `${fmtNum(tokens)} tokens · ${fmtNum(tools)} tool calls · ${fmtNum(vision)} vision calls · ${fmtNum(ocr)} OCR calls`;
+}
+async function refreshAuditStrip() {
+  const data = await send({ type: MSG.AUDIT_GET });
+  if (!data || data.ok === false) return;
+  auditSummary = data;
+  const active = data.activeRunId ? (data.runs || []).find((r) => r.id === data.activeRunId) : null;
+  if (active) {
+    liveStats.tokens = active.tokens?.total || 0;
+    liveStats.tools = active.toolCalls || 0;
+    liveStats.vision = active.vision?.count || 0;
+    liveStats.ocr = active.ocr?.count || 0;
+    liveStats.network = active.network?.count || 0;
+    liveStats.console = active.console?.count || 0;
+    liveStats.js = active.js?.count || 0;
+  }
+  updateAuditStrip();
+}
+
 function fmtNum(n) {
   const v = Number(n) || 0;
   if (v >= 1e9) return (v / 1e9).toFixed(1).replace(/\.0$/, "") + "B";
@@ -1864,13 +1948,16 @@ function toggleAudit() {
     return;
   }
   auditFilter = "all";
+  auditView = "logs";
   auditSearchText = "";
   els.auditSearch.value = "";
   els.auditTabs.querySelectorAll(".audit-tab").forEach((b) => b.classList.toggle("on", b.dataset.filter === "all"));
+  applyAuditView();
   void openAudit();
 }
 async function openAuditForTool(name) {
   if (auditSummary?.runs?.[0]) auditSelectedRunId = auditSummary.runs[0].id;
+  auditView = "logs";
   auditFilter = "all";
   auditSearchText = String(name || "").toLowerCase();
   els.auditSearch.value = name || "";
@@ -1908,6 +1995,8 @@ async function refreshAudit() {
   if (!auditSelectedRunId || !data.runs.some((r) => r.id === auditSelectedRunId)) {
     auditSelectedRunId = data.activeRunId || data.runs[0]?.id || null;
   }
+  updateAuditStrip();
+  applyAuditView();
   renderAuditOverall();
   renderAuditRuns();
   if (auditSelectedRunId) {
@@ -1919,7 +2008,21 @@ async function refreshAudit() {
   }
   renderAuditRunHead();
   renderAuditTimeline();
-  setAuditStatus(data.activeRunId ? "Live run in progress." : "Local only. Nothing leaves this browser.");
+  const version = chrome.runtime.getManifest?.().version || "";
+  setAuditStatus((data.activeRunId ? "Live run in progress." : "Local only. Nothing leaves this browser.") + (version ? ` · v${version}` : ""));
+}
+function applyAuditView() {
+  const logs = auditView !== "overview";
+  if (els.auditViewTabs) {
+    els.auditViewTabs.querySelectorAll(".audit-view-tab").forEach((b) => b.classList.toggle("on", b.dataset.view === (logs ? "logs" : "overview")));
+  }
+  els.auditOverall.hidden = logs;
+  els.auditRunsLabel.hidden = !logs;
+  els.auditRuns.hidden = !logs;
+  els.auditRunTitle.closest(".audit-run-head").hidden = !logs;
+  els.auditTabs.hidden = !logs;
+  els.auditSearch.hidden = !logs;
+  els.auditList.hidden = !logs;
 }
 function renderAuditOverall() {
   const o = auditSummary?.overall || {};
@@ -2044,6 +2147,7 @@ async function clearAuditLogs() {
   auditRun = null;
   auditSelectedRunId = null;
   await refreshAudit();
+  await refreshAuditStrip();
   setAuditStatus("Audit logs cleared.");
 }
 async function exportAuditLogs() {
